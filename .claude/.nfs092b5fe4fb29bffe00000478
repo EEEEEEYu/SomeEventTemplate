@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mamba env *)",
+      "Bash(tmux list-sessions *)",
+      "Bash(tmux capture-pane *)",
+      "Bash(tmux send-keys *)"
+    ]
+  }
+}

@@ -1,0 +1,75 @@
+# Base config — defaults shared across experiments. Per-stage configs in
+# configs/exp/ override fields and set DATA.name / MODEL.name.
+
+TRAINING:
+  seed: 42
+  max_epochs: 50
+  deterministic: false
+  num_sanity_val_steps: 2
+
+DISTRIBUTED:
+  accelerator: auto    # "cpu" on the login node, "gpu" once a node is allocated
+  devices: 1
+  num_nodes: 1
+  strategy: auto
+
+DATA:
+  name: ""             # set by experiment yaml
+  args: {}
+  dataloader:
+    batch_size: 128
+    test_batch_size: null
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    drop_last: false
+    shuffle_train: true
+    shuffle_val: false
+    shuffle_test: false
+
+MODEL:
+  name: ""             # set by experiment yaml
+  args: {}
+
+OPTIMIZER:
+  name: Adam
+  arguments:
+    lr: 1e-3
+  gradient_clip:
+    enabled: false
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: norm
+  gradient_accumulation:
+    enabled: false
+    scheduling: {}
+  stochastic_weight_averaging:
+    enabled: false
+    swa_lrs: 1e-2
+
+SCHEDULER:
+  learning_rate:
+    enabled: false
+    name: CosineAnnealingLR
+    arguments:
+      T_max: 50
+      eta_min: 1e-6
+    interval: epoch
+  early_stopping:
+    enabled: false
+    monitor: val_loss_epoch
+    mode: min
+    patience: 5
+    min_delta: 1.0e-5
+
+LOGGER:
+  log_dir_root: lightning_logs
+  experiment_name: run
+
+CHECKPOINT:
+  enabled: true
+  every_n_epochs: 1
+  monitor: val_loss_epoch
+  mode: min
+  filename: "best-{epoch:03d}-{val_loss_epoch:.5f}"
+  save_top_k: 1
+  save_last: true

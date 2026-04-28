@@ -3,6 +3,13 @@
 /venv
 *.DS_Store
 
+# Project-specific
+/data/                 # raw datasets + cached TBR tensors (large, regenerable)
+/difflogic/            # cloned externally — see README
+/experiments/*/        # per-run artifacts; keep the directory itself via .gitkeep
+!/experiments/.gitkeep
+!/experiments/*.md     # keep stage write-ups under version control
+
 # The following lines are from the github Python.gitignore template
 # Reference link: https://github.com/github/gitignore/blob/main/Python.gitignore
 # Byte-compiled / optimized / DLL files
