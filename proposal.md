@@ -110,15 +110,16 @@ DVS-Gesture is included now (rather than in Stage 4) because N-MNIST has weak te
    - `src/data/nmnist_dm.py`: 34×34 sensor, 2 polarities, 32 bins × 1ms. Output shape `[2, 32, 34, 34]` = 73,984 boolean inputs flattened.
    - `src/data/dvsgesture_dm.py`: 128×128 sensor (consider downsampling — see note below), 2 polarities, 32 bins × 1ms. Choose a fixed sample-window length (e.g., 500ms) and crop/pad the event stream to that.
 
-4. **Cache encoded tensors to disk.** Encode once into `data/<dataset>_tbr_32x1ms_<resolution>/` as either `.pt` files per sample or webdataset shards. The DataLoader reads cached tensors. Document the cache directory structure and encoding parameters in a manifest file so re-encoding with different parameters doesn't silently overwrite.
+4. **Cache encoded tensors to disk.** Encode once into `data/<dataset>_tbr_32x1ms_<resolution>/` as either `.pt` files per sample or hdf5(recommended). The DataLoader reads cached tensors. Document the cache directory structure and encoding parameters in a manifest file so re-encoding with different parameters doesn't silently overwrite.
 
 5. **Note on DVS-Gesture spatial resolution.** Full 128×128 means 2·32·128·128 = 1,048,576 input bits, which is large for an LGN. Two acceptable starting points:
    - Downsample to 32×32 spatial (max-pool the encoded TBR tensor): 65,536 input bits, comparable to N-MNIST. **Recommended for first run.**
    - Keep 128×128 with smaller hidden_dim and fewer layers to manage compute. Document the choice and revisit later if accuracy is poor.
+   - For future utility, let's encode 128x128 full resolution for now.
 
 6. **Train.** For each dataset:
    - Hidden_dim 32k–64k, num_layers 5–6.
-   - Acceptance: discretized test accuracy ≥ 95% on N-MNIST, ≥ 80% on DVS-Gesture (11-class, the TBR paper reports ~95%+ with Inception3D — your floor is much lower; you just need a working model).
+   - Acceptance(not strict, ask for future options when finishing): discretized test accuracy ≥ 95% on N-MNIST, ≥ 80% on DVS-Gesture (11-class, the TBR paper reports ~95%+ with Inception3D — your floor is much lower; you just need a working model).
 
 7. **Log baseline numbers** in `experiments/02_scalar_cdlgn.md`: per-dataset test accuracy, gate count, inference throughput on one CPU core (use difflogic's `CompiledLogicNet` if accessible), training time, GPU memory.
 

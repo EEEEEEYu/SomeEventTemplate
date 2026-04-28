@@ -28,14 +28,17 @@ from src.utils.resume import get_resume_info
 from src.utils.seeding import seed_all
 
 
+from src.data.mnist_dm import MNISTDataModule
+from src.models.logic_classifier import LogicClassifier
+
 # Registries — populated as proposal stages land their classes.
 DATAMODULES: Dict[str, Type[LightningDataModule]] = {
-    # Stage 1: "mnist": MNISTDataModule,
+    "mnist": MNISTDataModule,
     # Stage 2: "nmnist": NMNISTDataModule, "dvsgesture": DVSGestureDataModule,
 }
 
 MODELS: Dict[str, Type[LightningModule]] = {
-    # Stage 1: "logic_classifier": LogicClassifier,
+    "logic_classifier": LogicClassifier,
 }
 
 
@@ -126,6 +129,9 @@ def main(cfg: AppConfig, runtime: dict, dry_run: bool):
     _write_manifest(os.path.join(run_name, version or "version_pending"), cfg, runtime)
 
     trainer.fit(model=model, datamodule=dm, ckpt_path=ckpt_for_fit)
+    # Always evaluate on the actual test set after fit. Stage gates target test
+    # accuracy, not the train-split val accuracy.
+    trainer.test(model=model, datamodule=dm, verbose=True)
 
 
 if __name__ == "__main__":

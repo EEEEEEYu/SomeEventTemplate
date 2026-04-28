@@ -1,7 +1,7 @@
 # Project Status
 
 **Last updated:** 2026-04-28
-**Current stage:** Stage 0 complete (with documented deviation); ready for Stage 1
+**Current stage:** Stage 1 complete; ready for Stage 2 (event datasets + scalar CDLGN)
 **Blockers:** none — GPU node allocated (rtxa6000 ×4)
 
 `proposal.md` is the authoritative spec; this file is the execution log.
@@ -37,11 +37,11 @@ python train.py --config configs/base.yaml --dry-run
 - Manifest: [experiments/00_difflogic_repro.md](experiments/00_difflogic_repro.md)
 - **Stage 1 parity baseline: 97.40%** (±0.3% tolerance window: 97.10–97.70%)
 
-### Stage 1 — Lightning + MNIST parity (proposal §Stage 1)
-- [ ] Lightning training runs without errors
-- [ ] Discretized eval ≥ 97.2% on MNIST
-- [ ] Gate count + inference latency logged
-- Manifest target: `experiments/01_mnist_lightning.md`
+### Stage 1 — Lightning + MNIST parity (proposal §Stage 1) — ✅ passed
+- [x] Lightning training runs without errors
+- [x] Discretized test_acc = **97.36%** ≥ 97.10% gate (anchored to Stage 0 baseline 97.40% ±0.3%)
+- [x] Gate count (40,000) + train (~150 it/s) and eval (270 it/s) throughput logged
+- Manifest: [experiments/01_mnist_lightning.md](experiments/01_mnist_lightning.md)
 
 ### Stage 2 — TBR + scalar CDLGN, both datasets (proposal §Stage 2)
 - [ ] TBR encoder unit-tested  ← (lands in Phase A)
@@ -78,6 +78,7 @@ python train.py --config configs/base.yaml --dry-run
 - **2026-04-28** — Discarded the original template's dynamic-import `ModelInterface`/`DataInterface` core; adopted proposal's `src/{data,models,modules,utils}/` layout with explicit registries in `train.py`. Rationale: per-stage Lightning modules need bespoke `configure_optimizers` (Adam lr=0.01) and inference-mode toggles that fight a generic wrapper. Salvaged: config schema, callback assembly, resume helpers (now under `src/utils/`).
 - **2026-04-28** — Patched `difflogic/cuda/difflogic_kernel.cu` (six `AT_DISPATCH_*` sites: `.type()` → `.scalar_type()`) so it compiles against PyTorch 2.8 (`at::DeprecatedTypeProperties` no longer auto-converts to `c10::ScalarType`). Patch saved to `patches/difflogic_pytorch28_scalar_type.patch`; difflogic commit pinned to `469702c01ff0bfac9cdc6a395134252e11a56bd8`. Install command is `pip install ./difflogic --no-build-isolation` — `-e` and PEP 517 isolation both break in different ways.
 - **2026-04-28** — Stage 0 MNIST repro gate **accepted at 97.40%** (nominal threshold was 97.5%; deviation ~0.1%). Plateaued for ~30k iterations with no upward trend; further training would not change the install-correctness signal this gate is meant to provide. Stage 1 parity check now uses 97.40% as the baseline (±0.3% window). Full rationale: [experiments/00_difflogic_repro.md](experiments/00_difflogic_repro.md) §Decision.
+- **2026-04-28** — Stage 1 Lightning parity passed at **97.36%** test_acc (Δ −0.04% vs Stage 0 baseline). Used `connections="random"` (proposal default) rather than Petersen's `"unique"`; difference was negligible at this scale. lr=0.01 hardcoded as the `LogicClassifier` default to prevent config typos from breaking parity. No `on_validation_epoch_start` hook needed — Lightning's auto `model.eval()` already flips difflogic into the discretized branch.
 
 ## Open risks
 
