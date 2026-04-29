@@ -75,9 +75,16 @@ class StreamingClassifier(pl.LightningModule):
         # input shape (per slice)
         in_features: int,                  # 2 * H * W per slice
         M: int = 32,                       # bits per slice / encoder output width
-        # encoder
-        encoder_hidden_dim: int = 4070,
-        encoder_num_layers: int = 1,       # WordLogicLayers in the encoder
+        # encoder. Provide either (encoder_dims) explicitly OR
+        # (encoder_hidden_dim, encoder_num_layers) for a flat-width stack.
+        # `encoder_dims` is a list of per-layer out_dims; the final entry
+        # MUST equal `M`. difflogic's constraint requires `2*out >= in` per
+        # layer, so a stack going 2048→...→32 needs a halving staircase
+        # (≥6 layers from 2048 to 32). Pass `encoder_dims` explicitly when
+        # `in_features` >> 2*M to honor this constraint.
+        encoder_hidden_dim: Optional[int] = None,
+        encoder_num_layers: Optional[int] = None,
+        encoder_dims: Optional[List[int]] = None,
         # buffer
         N: int = 32,                       # slice history depth
         tbptt_k: Optional[int] = None,     # None = full BPTT (Tier 1)
@@ -116,20 +123,40 @@ class StreamingClassifier(pl.LightningModule):
         # Output of last layer: `[B, M, 1]` → squeeze last axis → `[B, M]`,
         # the buffer's row-0 write target.
         #
-        # Intermediate hidden width is `encoder_hidden_dim` (interior layers
-        # have in_dim=out_dim=encoder_hidden_dim); the last encoder layer
-        # is a "head" that projects from `encoder_hidden_dim` to `M`.
+        # Each layer must satisfy difflogic's `2*out >= in` constraint, so
+        # going from in_features=2048 to M=32 needs at least
+        # ceil(log2(in_features / M)) = 6 halvings. The user supplies
+        # `encoder_dims` to control per-layer widths; otherwise a default
+        # halving staircase is built automatically.
         # ------------------------------------------------------------------
+        if encoder_dims is None:
+            encoder_dims = self._default_halving_encoder_dims(
+                in_features=in_features,
+                target=M,
+                hidden_dim=encoder_hidden_dim,
+                num_layers=encoder_num_layers,
+            )
+        else:
+            encoder_dims = list(encoder_dims)
+        if len(encoder_dims) == 0 or encoder_dims[-1] != M:
+            raise ValueError(
+                f"encoder_dims must end with M={M}; got {encoder_dims}"
+            )
         encoder_layers: List[nn.Module] = []
         prev = in_features
-        for li in range(encoder_num_layers):
-            out = M if li == encoder_num_layers - 1 else encoder_hidden_dim
+        for out in encoder_dims:
+            if 2 * out < prev:
+                raise ValueError(
+                    f"encoder layer in={prev} out={out} violates difflogic's "
+                    f"2*out >= in constraint. Use a deeper staircase."
+                )
             encoder_layers.append(WordLogicLayer(
                 in_dim=prev, out_dim=out, M=1,
                 grad_factor=grad_factor, connections=connections, device=device,
             ))
             prev = out
         self.encoder = nn.Sequential(*encoder_layers)
+        self._encoder_dims = encoder_dims
 
         # ------------------------------------------------------------------
         # buffer
@@ -163,7 +190,7 @@ class StreamingClassifier(pl.LightningModule):
 
         # P2 layer-groups for diagnostics + warmup. Encoder = encoder layers;
         # decoder = cross_slice + word decoder; readout separate.
-        encoder_prefixes = [f"encoder.{i}." for i in range(encoder_num_layers)]
+        encoder_prefixes = [f"encoder.{i}." for i in range(len(encoder_dims))]
         decoder_prefixes = ["cross_slice."] + [f"decoder.{i}." for i in range(decoder_num_layers)]
         self.layer_groups = {
             "encoder": encoder_prefixes,
@@ -176,6 +203,56 @@ class StreamingClassifier(pl.LightningModule):
         self._N = N
         self._warmup_steps = warmup_steps if warmup_steps is not None else N
         self._loss_at_every_step = loss_at_every_step
+
+    # ----------------------------------------------------------------------
+    # encoder shape helpers
+
+    @staticmethod
+    def _default_halving_encoder_dims(
+        in_features: int,
+        target: int,
+        hidden_dim: Optional[int],
+        num_layers: Optional[int],
+    ) -> List[int]:
+        """Build a per-layer out_dim list for the encoder.
+
+        Three modes:
+          1. `hidden_dim` and `num_layers` both given → flat-width stack
+             `[hidden_dim] * (num_layers - 1) + [target]`. Caller is
+             responsible for the difflogic `2*out >= in` constraint at the
+             first layer.
+          2. Only `num_layers` given → halving staircase down to `target`
+             over exactly `num_layers` layers (uniform geometric ratio).
+          3. Neither given → auto-pick the minimum number of halvings:
+             `ceil(log2(in_features / target))`, one geometric step per layer.
+        """
+        if hidden_dim is not None and num_layers is not None:
+            if num_layers < 1:
+                raise ValueError(f"num_layers must be >= 1; got {num_layers}")
+            if num_layers == 1:
+                return [target]
+            return [hidden_dim] * (num_layers - 1) + [target]
+        # Auto-build a halving staircase. Determine the number of halvings
+        # required from in_features → target.
+        if target < 1 or in_features < 1:
+            raise ValueError("in_features and target must be positive")
+        import math
+        n = num_layers
+        if n is None:
+            n = max(1, math.ceil(math.log2(max(in_features / target, 1))))
+        # Geometric staircase: ratio = (target / in_features)^(1/n) per step.
+        ratio = (target / in_features) ** (1.0 / n)
+        dims: List[int] = []
+        prev = in_features
+        for i in range(n - 1):
+            d = max(target, int(round(prev * ratio)))
+            # Ensure 2*d >= prev (difflogic constraint). If not, force d = prev/2.
+            if 2 * d < prev:
+                d = max(target, prev // 2 + (prev % 2))
+            dims.append(d)
+            prev = d
+        dims.append(target)
+        return dims
 
     # ----------------------------------------------------------------------
     # input-shaping helpers
@@ -247,8 +324,16 @@ class StreamingClassifier(pl.LightningModule):
             loss_acc = self.loss_fn(last_logits, y)
             loss_count = 1
 
-        loss = loss_acc / max(loss_count, 1)
+        # If `warmup_steps >= T`, no slice contributed to the per-step loss.
+        # Fall back to the last step's logits — better than crashing on a
+        # divide-by-None and a sane interpretation: "buffer didn't fully
+        # populate, but we still have a final readout to learn from."
         assert last_logits is not None
+        if loss_acc is None:
+            loss_acc = self.loss_fn(last_logits, y)
+            loss_count = 1
+
+        loss = loss_acc / max(loss_count, 1)
         acc = multiclass_accuracy(
             last_logits, y, num_classes=self.hparams.num_classes,
             average="micro", top_k=1,

@@ -30,19 +30,22 @@ from src.utils.seeding import seed_all
 
 from src.data.mnist_dm import MNISTDataModule
 from src.data.dvsgesture_dm import DVSGestureDataModule
+from src.data.dvsgesture_per_slice_dm import DVSGesturePerSliceDataModule
 from src.models.logic_classifier import LogicClassifier
 from src.models.tier0_classifier import Tier0Classifier
+from src.models.streaming_classifier import StreamingClassifier
 
 # Registries — populated as proposal stages land their classes.
 DATAMODULES: Dict[str, Type[LightningDataModule]] = {
     "mnist": MNISTDataModule,
-    "dvsgesture": DVSGestureDataModule,
-    # Stage 2 streaming: "nmnist": NMNISTDataModule (per-slice variant)
+    "dvsgesture": DVSGestureDataModule,                       # fused [B, 2, num_bins, H, W]
+    "dvsgesture_per_slice": DVSGesturePerSliceDataModule,     # streaming [B, T, 2, H, W]
 }
 
 MODELS: Dict[str, Type[LightningModule]] = {
     "logic_classifier": LogicClassifier,
     "tier0_classifier": Tier0Classifier,
+    "streaming_classifier": StreamingClassifier,
 }
 
 
