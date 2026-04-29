@@ -1,0 +1,145 @@
+# Phase P §P4d / proposal v2.1 §Tier 0 — decisive experiment.
+#
+# DVS-Gesture, single fused [B, 2, 128, 32, 32] TBR tensor, M=128 word width,
+# one ShiftedWordLogicLayer providing within-word temporal coupling.
+#
+# Decision gate (proposal v2.1 line 110, Phase P plan §P4d):
+#   discretized test_acc ≥ 80% AND P(shift ≠ 0) ≥ 0.3 in the shifted layer
+#   → defer Stages 3–4; Tier 0 is sufficient.
+#   Otherwise resume Stage 2 with always-on additions enabled.
+
+TRAINING:
+  seed: 0
+  # 50 epochs cap — first stabilization run. Stage 1 plateaued in ~70 epochs
+  # at hidden=8000 single-layer; Tier 0 has 5 layers + soft-shift, so per-step
+  # work is heavier but learning should be visible by epoch 20 if at all.
+  max_epochs: 50
+  deterministic: false
+  num_sanity_val_steps: 0
+  tbptt_k: 4                 # no-op for Tier 0 (single-pass).
+  encoder_warmup_epochs: 5   # P2 hook duplicate; the model arg below is what
+                             # Tier0Classifier reads.
+  matmul_precision: high     # enable TF32/tensor cores on L40S; Lightning was
+                             # warning about this. Pure speedup, no accuracy hit.
+  compile_model: false       # torch.compile applied to the LightningModule
+                             # broke training (model stuck at ~random val_acc;
+                             # likely interaction with grad-norm logger hooks /
+                             # encoder warmup / DDP find_unused_parameters_true).
+                             # Leave off until we move compile to body-only.
+
+DISTRIBUTED:
+  # 2 GPUs available on this allocation (csd00, 2× L40S 48GB).
+  # `devices: 2` + `strategy: ddp` → DataParallelDistributed: each replica
+  # holds a full model copy and processes its own batch slice; gradients
+  # are all-reduced. With `dataloader.batch_size: 8` (per-replica), the
+  # effective global batch is 16. DataLoader sampling is auto-injected with
+  # a DistributedSampler by Lightning. Reproducibility: `seed_all` +
+  # `pl.seed_everything(workers=True)` already cover per-rank seeding in
+  # train.py:main.
+  accelerator: gpu
+  devices: 2
+  num_nodes: 1
+  # `ddp_find_unused_parameters_true` (vs plain `ddp`) is required because
+  # the encoder warm-up freezes decoder params (requires_grad=False) for the
+  # first `encoder_warmup_epochs` — DDP's normal mode raises if any param
+  # graph leaves don't receive grad. After warm-up ends the flag is harmless
+  # (all params are again live).
+  strategy: ddp_find_unused_parameters_true
+
+DATA:
+  name: dvsgesture
+  args:
+    data_root: data
+    num_bins: 128
+    bin_duration_us: 16000     # 16ms × 128 = 2.048s sample window
+    sensor_h: 32
+    sensor_w: 32
+    download: true
+  dataloader:
+    batch_size: 24             # ↑ from 8: with shift_lut K=9 the soft-shift tensor is
+                               # [B, hidden, K, M] = [24, 4070, 9, 128] ≈ 1.8 GB per layer
+                               # (was [8, 4070, 128, 128] ≈ 8.4 GB). L40S 48 GB has plenty
+                               # of headroom; bigger batch ⇒ fewer steps ⇒ faster epoch.
+                               # DDP-effective batch is 48.
+    test_batch_size: 16
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    drop_last: true
+    shuffle_train: true
+    shuffle_val: false
+    shuffle_test: false
+
+MODEL:
+  name: tier0_classifier
+  args:
+    in_features: 2048          # 2 polarities × 32 × 32
+    M: 128
+    hidden_dim: 4070           # 4070 × 128 = 520,960 = 11 × 47,360 ✓
+    num_encoder_layers: 2      # ↑ from 1: balances encoder/decoder grad-norms
+                               # (1:50 ratio in the first run was a starvation symptom)
+    num_decoder_layers: 3      # 2 encoder + 1 shifted + 3 decoder = 6 word layers total
+    num_classes: 11
+    tau: 500.0                 # ↑ from 10. Stage 1 had group_size=800 with tau=10
+                               # → softmax logits in [0, 80]. Tier 0's group_size=47360
+                               # saturates at tau=10 (logits in [0, 4736] → softmax
+                               # effectively one-hot from epoch 0, vanishing encoder
+                               # grads). tau=500 gives logits in [0, 95] — same
+                               # softmax temperature regime as Stage 1.
+    connections: random
+    lr: 0.01                   # Stage 1's discovered LR.
+    grad_factor: 1.0
+    device: cuda
+    encoder_warmup_epochs: 5   # P2 hook (proposal v2.1 §Always-on additions task 2):
+                               # first 5 epochs train encoder + readout only; shifted +
+                               # decoder word layers frozen. Bootstraps encoder before
+                               # decoder grad signal dominates.
+    shift_lut: [0, 1, 2, 4, 8, 16, 32, 64, 127]
+                               # log-scale shift vocabulary (K=9 instead of M=128).
+                               # 14× memory + speedup on the soft-shift bottleneck.
+                               # First entry must be 0 (the shift=0 ⇔ WordLogicLayer
+                               # parity invariant). Includes M-1 (=127) so the LUT can
+                               # express the "rotate-all-the-way" boundary case.
+
+OPTIMIZER:
+  name: Adam
+  arguments:
+    lr: 0.01
+  gradient_clip:
+    enabled: true              # tame the decoder's large grad spikes; see g_dec
+                               # column in p4_watch_progress.py output (~5–12 norm
+                               # in the first run). Stage 1 didn't need this; the
+                               # 5-layer Tier 0 stack does.
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: norm
+  gradient_accumulation:
+    enabled: false
+  stochastic_weight_averaging:
+    enabled: false
+
+SCHEDULER:
+  learning_rate:
+    enabled: false
+  early_stopping:
+    enabled: false
+
+LOGGER:
+  log_dir_root: lightning_logs
+  experiment_name: P4_tier0_dvsgesture
+
+CHECKPOINT:
+  enabled: true
+  every_n_epochs: 1
+  monitor: val_acc
+  mode: max
+  filename: "best-{epoch:03d}-{val_acc:.4f}"
+  save_top_k: 1
+  save_last: true
+
+DIAGNOSTICS:
+  # Tier 0 has a meaningful encoder/decoder split — turn on grad-norm logging
+  # (proposal v2.1 §"Always-on additions" task 3). The 1:10 rule of thumb
+  # interprets the resulting log: encoder grad < (1/10) decoder grad at
+  # convergence ⇒ encoder isn't learning regardless of the loss curve.
+  gradient_norm_logger: true
+  gradient_norm_log_every_n_steps: 50

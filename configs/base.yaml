@@ -6,6 +6,15 @@ TRAINING:
   max_epochs: 50
   deterministic: false
   num_sanity_val_steps: 2
+  # Truncated BPTT depth for streaming Stage 4 (proposal v2.1 §Tier 2). Floor
+  # k=4; k=N is full BPTT (Tier 1 fallback for small N); k=1 is v2's original
+  # detach-everything (ablation only). No-op for non-streaming models.
+  tbptt_k: 4
+  # Encoder warm-up (proposal v2.1 §"Always-on additions" task 2). First
+  # `encoder_warmup_epochs` epochs train the encoder + readout only; decoder
+  # frozen. Models declare their split via a `layer_groups` attribute; without
+  # it this is a no-op (Stage 1 default).
+  encoder_warmup_epochs: 0
 
 DISTRIBUTED:
   accelerator: auto    # "cpu" on the login node, "gpu" once a node is allocated
@@ -73,3 +82,11 @@ CHECKPOINT:
   filename: "best-{epoch:03d}-{val_loss_epoch:.5f}"
   save_top_k: 1
   save_last: true
+
+DIAGNOSTICS:
+  # Per-layer-group gradient-norm logger (proposal v2.1 §"Always-on additions"
+  # task 1). Off in Stage 1 — there's no useful encoder/decoder split. Turn on
+  # for Stage 2+ runs; the 1:10 encoder/decoder grad-norm rule of thumb is the
+  # diagnostic this powers.
+  gradient_norm_logger: false
+  gradient_norm_log_every_n_steps: 50

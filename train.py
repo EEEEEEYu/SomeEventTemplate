@@ -29,16 +29,20 @@ from src.utils.seeding import seed_all
 
 
 from src.data.mnist_dm import MNISTDataModule
+from src.data.dvsgesture_dm import DVSGestureDataModule
 from src.models.logic_classifier import LogicClassifier
+from src.models.tier0_classifier import Tier0Classifier
 
 # Registries — populated as proposal stages land their classes.
 DATAMODULES: Dict[str, Type[LightningDataModule]] = {
     "mnist": MNISTDataModule,
-    # Stage 2: "nmnist": NMNISTDataModule, "dvsgesture": DVSGestureDataModule,
+    "dvsgesture": DVSGestureDataModule,
+    # Stage 2 streaming: "nmnist": NMNISTDataModule (per-slice variant)
 }
 
 MODELS: Dict[str, Type[LightningModule]] = {
     "logic_classifier": LogicClassifier,
+    "tier0_classifier": Tier0Classifier,
 }
 
 
@@ -87,8 +91,25 @@ def main(cfg: AppConfig, runtime: dict, dry_run: bool):
     seed_all(cfg.TRAINING.seed, deterministic=cfg.TRAINING.deterministic)
     pl.seed_everything(cfg.TRAINING.seed, workers=True)
 
+    # Activate TF32 / tensor cores for fp32 matmul before any CUDA tensor is
+    # constructed. Lightning warns about this on Ampere+/L40S; here it's
+    # config-controlled instead of the global default.
+    import torch as _torch
+    _torch.set_float32_matmul_precision(cfg.TRAINING.matmul_precision)
+
     info = get_resume_info(cfg, runtime)
     mode, run_name, version, ckpt_path = info["mode"], info["run_name"], info["version"], info["ckpt_path"]
+
+    # DDP rank-0 propagates the run_name via env var so subprocess ranks reuse
+    # it (each rank otherwise calls datetime.now() independently and lands in
+    # a different timestamped dir, fragmenting tfevents). LOCAL_RANK is set by
+    # Lightning before importing user code on subprocess ranks.
+    rank0_runname_env = "TRAIN_PY_RUN_NAME"
+    if os.environ.get("LOCAL_RANK") is None:
+        # parent / single-process: use freshly-resolved run_name; export for kids.
+        os.environ[rank0_runname_env] = run_name
+    elif rank0_runname_env in os.environ:
+        run_name = os.environ[rank0_runname_env]
 
     logger = TensorBoardLogger(save_dir=".", name=run_name, version=version if mode == "resume" else None)
     callbacks = load_callbacks(cfg)
@@ -125,6 +146,18 @@ def main(cfg: AppConfig, runtime: dict, dry_run: bool):
     else:
         model = MODELS[cfg.MODEL.name](**cfg.MODEL.args)
         ckpt_for_fit = ckpt_path if mode == "resume" else None
+
+    # `torch.compile` after construction (config-gated). For Tier 0 this fuses
+    # the 16-op `bin_op_s` loop into a single CUDA kernel.
+    # NB: `mode='reduce-overhead'` uses CUDAGraphs which caches tensor pointers
+    # across iterations and crashes on our pattern (the LightningModule's
+    # training_step receives outputs that the next iteration's CUDAGraph will
+    # overwrite — `RuntimeError: accessing tensor output of CUDAGraphs that
+    # has been overwritten`). The default mode keeps the inductor fusion of
+    # `bin_op_s`'s 16-op loop without CUDAGraphs, which is the speedup we
+    # actually wanted.
+    if cfg.TRAINING.compile_model:
+        model = _torch.compile(model)
 
     _write_manifest(os.path.join(run_name, version or "version_pending"), cfg, runtime)
 

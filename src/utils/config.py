@@ -35,6 +35,37 @@ class TrainingConfig:
     inference_mode: bool = False
     num_sanity_val_steps: int = 2
     use_compile: bool = False
+    # Truncated BPTT depth for the streaming Stage 4 architecture (proposal v2.1
+    # §Tier 2). k=N is full BPTT (Tier 1), k=4..8 is the Tier 2 default with
+    # floor k≥4, k=1 is v2's original detach-everything behaviour (ablation
+    # only). No-op for Stage 1 single-pass models.
+    tbptt_k: int = 4
+    # Encoder warm-up epochs (proposal v2.1 §"Always-on additions" task 2).
+    # During the first `encoder_warmup_epochs` epochs only the encoder layer
+    # group (and readout) trains. Models declare their encoder/decoder split
+    # via a `layer_groups` attribute; without it this is a no-op.
+    encoder_warmup_epochs: int = 0
+    # `torch.set_float32_matmul_precision`. "highest" is PyTorch's default
+    # (full precision matmul); "high" enables TF32 / TensorFloat-32 on Ampere+
+    # and L40S, ~10–20% speedup on tensor-core ops with no accuracy regression
+    # for our use case (the difflogic relaxation is already a stochastic
+    # estimator). Lightning warns to set this when running on tensor-core GPUs.
+    matmul_precision: str = "highest"
+    # `torch.compile` the LightningModule after construction. Fuses
+    # `bin_op_s`'s 16-op Python loop into a single CUDA kernel; biggest single
+    # speedup for Tier 0's ShiftedWordLogicLayer. First-step cold start adds
+    # 20–60 s; ignore on short debug runs by leaving false.
+    compile_model: bool = False
+
+
+@dataclass
+class DiagnosticsConfig:
+    # Per-layer-group gradient-norm logger (proposal v2.1 §"Always-on additions"
+    # task 1). Logs `gradnorm/<group>` so the 1:10 encoder/decoder grad-norm
+    # rule of thumb can be evaluated post-hoc. Cheap; off in Stage 1 by default
+    # since there's no meaningful layer-group split, but on for Stage 2+.
+    gradient_norm_logger: bool = False
+    gradient_norm_log_every_n_steps: int = 50
 
 
 @dataclass
@@ -150,6 +181,7 @@ class AppConfig:
     SCHEDULER: SchedulerConfig = field(default_factory=SchedulerConfig)
     LOGGER: LoggerConfig = field(default_factory=LoggerConfig)
     CHECKPOINT: CheckpointConfig = field(default_factory=CheckpointConfig)
+    DIAGNOSTICS: DiagnosticsConfig = field(default_factory=DiagnosticsConfig)
 
 
 def _validate(cfg: AppConfig) -> List[str]:

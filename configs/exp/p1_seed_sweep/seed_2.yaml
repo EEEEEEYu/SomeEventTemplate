@@ -1,0 +1,74 @@
+# P1 task 2 (proposal v2.1 §Phase P) — Stage 1 robustness seed sweep, seed=2.
+# Identical to configs/exp/01_mnist_lightning.yaml except for the seed and
+# experiment_name. Pass criterion: discretized test_acc std across seeds ≤ 0.3%.
+
+TRAINING:
+  seed: 2
+  max_epochs: 100
+  deterministic: false
+  num_sanity_val_steps: 0
+
+DISTRIBUTED:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  strategy: auto
+
+DATA:
+  name: mnist
+  args:
+    data_root: data
+    val_size: 10000
+    split_seed: 42
+    download: true
+  dataloader:
+    batch_size: 100
+    test_batch_size: 100
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    drop_last: true
+    shuffle_train: true
+    shuffle_val: false
+    shuffle_test: false
+
+MODEL:
+  name: logic_classifier
+  args:
+    in_dim: 784
+    hidden_dim: 8000
+    num_layers: 6
+    num_classes: 10
+    tau: 10.0
+    connections: random
+    lr: 0.01
+
+OPTIMIZER:
+  name: Adam
+  arguments:
+    lr: 0.01
+  gradient_clip:
+    enabled: false
+  gradient_accumulation:
+    enabled: false
+  stochastic_weight_averaging:
+    enabled: false
+
+SCHEDULER:
+  learning_rate:
+    enabled: false
+  early_stopping:
+    enabled: false
+
+LOGGER:
+  log_dir_root: lightning_logs
+  experiment_name: p1_seed_sweep_seed2
+
+CHECKPOINT:
+  enabled: true
+  every_n_epochs: 1
+  monitor: val_acc
+  mode: max
+  filename: "best-{epoch:03d}-{val_acc:.4f}"
+  save_top_k: 1
+  save_last: true

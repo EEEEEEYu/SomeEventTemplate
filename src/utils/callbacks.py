@@ -10,6 +10,7 @@ from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTh
 from rich.table import Table
 
 from src.utils.config import AppConfig
+from src.utils.diagnostics import GradientNormLogger
 
 
 class MultiRowRichProgressBar(RichProgressBar):
@@ -72,5 +73,11 @@ def load_callbacks(cfg: AppConfig) -> List[plc.Callback]:
     swa = cfg.OPTIMIZER.stochastic_weight_averaging
     if swa.enabled:
         callbacks.append(plc.StochasticWeightAveraging(swa_lrs=swa.swa_lrs))
+
+    diag = cfg.DIAGNOSTICS
+    if diag.gradient_norm_logger:
+        callbacks.append(GradientNormLogger(
+            log_every_n_steps=diag.gradient_norm_log_every_n_steps,
+        ))
 
     return callbacks

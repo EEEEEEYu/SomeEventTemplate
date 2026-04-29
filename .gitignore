@@ -4,11 +4,22 @@
 *.DS_Store
 
 # Project-specific
-/data/                 # raw datasets + cached TBR tensors (large, regenerable)
-/difflogic/            # cloned externally — see README
-/experiments/*/        # per-run artifacts; keep the directory itself via .gitkeep
+# (Inline `# comment` after a pattern is NOT supported in .gitignore — git
+# treats the whole line as the pattern, so the rule silently fails to match.
+# Keep comments on their own lines.)
+
+# raw datasets + cached TBR tensors (large, regenerable)
+/data/
+
+# cloned externally — see README. Tracked as a submodule reference; this rule
+# is a belt-and-braces measure if the submodule ever gets de-registered.
+/difflogic/
+
+# per-run artifacts; keep the directory itself via .gitkeep, and keep stage
+# write-ups under version control.
+/experiments/*/
 !/experiments/.gitkeep
-!/experiments/*.md     # keep stage write-ups under version control
+!/experiments/*.md
 
 # The following lines are from the github Python.gitignore template
 # Reference link: https://github.com/github/gitignore/blob/main/Python.gitignore

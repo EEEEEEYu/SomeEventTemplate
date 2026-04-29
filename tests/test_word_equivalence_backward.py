@@ -1,68 +1,31 @@
-"""Stage 3 task 3: WordLogicLayer relaxed forward + backward equivalence.
+"""Backward-pass equivalence test — DROPPED in proposal v2.
 
-With soft (non-one-hot) operator distributions and continuous inputs in [0, 1],
-output and gradients w.r.t. operator logits must match difflogic's path within
-numerical tolerance. This catches relaxation bugs (e.g. subtly wrong T-norm)
-that pure forward-on-hard-inputs misses.
+> Proposal v2 §Stage 3 task 3 (line 241):
+>   "Backward-pass equivalence test — dropped in v2. Without a meaningful
+>   scalar reference for the streaming pipeline, this test would only
+>   re-validate the same bit operations the forward test already covers.
+>   The `M=1` forward equivalence is the parity anchor; deeper gradient
+>   checks are deferred until/unless Stage 4 fails the gate and we need
+>   to localise."
 
-Scaffold — bodies will be filled when Stage 3's WordLogicLayer lands.
+The original v1 body is preserved in git history (see commit 6e1ef5e
+scaffolds and the v2-pivot rewrite). It is left as a `pytest.skip` rather
+than deleted so the dropped-test rationale is auditable in the test suite
+(per Phase P plan §P3 task 5).
+
+Re-enable this test only if v2 Stage 4 fails its accuracy gate and we
+need to disambiguate substrate vs operator bugs.
 """
 
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
-import torch
-
-from .conftest import needs_difflogic, needs_cuda
 
 
-def _has_word_logic() -> bool:
-    return importlib.util.find_spec("src.modules.word_logic") is not None
-
-
-needs_word_logic = pytest.mark.skipif(
-    not _has_word_logic(),
-    reason="requires src/modules/word_logic.py (proposal §Stage 3 task 1)",
+@pytest.mark.skip(
+    reason="Backward-pass equivalence dropped in proposal v2 §Stage 3 task 3. "
+           "M=1 forward parity in test_word_equivalence_forward.py is the substrate "
+           "anchor; deeper gradient checks are deferred unless Stage 4 fails its gate."
 )
-
-
-@needs_difflogic
-@needs_cuda
-@needs_word_logic
-@pytest.mark.parametrize("seed", [0, 1, 2])
-def test_word_layer_backward_matches_difflogic(seed):
-    from difflogic import LogicLayer
-    from src.modules.word_logic import WordLogicLayer
-
-    torch.manual_seed(seed)
-    in_features = 32
-    out_features = 16
-    batch = 4
-    W = 8
-
-    word_layer = WordLogicLayer(
-        in_features=in_features, out_features=out_features, word_width=W,
-        connections="random", seed=seed,
-    ).cuda().train()
-    scalar_layer = LogicLayer(in_features, out_features).cuda().train()
-    # TODO Stage 3: synchronize operator logits + connectivity between layers.
-
-    x = torch.rand(batch, in_features, W, device="cuda", requires_grad=False)
-
-    word_out = word_layer(x)                                       # [B, out, W]
-    scalar_out = torch.stack([scalar_layer(x[..., w]) for w in range(W)], dim=-1)
-
-    assert torch.allclose(word_out, scalar_out, atol=1e-5), \
-        "Relaxed forward outputs differ between word and scalar paths."
-
-    target = torch.zeros_like(word_out)
-    word_loss = torch.nn.functional.mse_loss(word_out, target)
-    scalar_loss = torch.nn.functional.mse_loss(scalar_out, target)
-
-    word_grad = torch.autograd.grad(word_loss, word_layer.weights, retain_graph=False)[0]
-    scalar_grad = torch.autograd.grad(scalar_loss, scalar_layer.weights, retain_graph=False)[0]
-
-    assert torch.allclose(word_grad, scalar_grad, atol=1e-4), \
-        "Operator-logit gradients differ between word and scalar paths."
+def test_word_layer_backward_matches_difflogic():
+    pytest.skip("dropped in v2")
