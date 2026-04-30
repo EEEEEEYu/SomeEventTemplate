@@ -75,7 +75,15 @@ MODEL:
     tau: 100.0                      # group_size = 11_840; tau/group_size ≈ 0.0085 — same
                                     # softmax-temperature regime as Stage 1's tau=10/800.
     lr: 0.01                        # Stage 1's discovered LR
-    grad_factor: 1.0
+    grad_factor: 2.0                # proposal §Stage 1 task 2: "for deep models
+                                    # (>6 layers), the grad_factor should be
+                                    # increased (e.g., 2) to avoid vanishing
+                                    # gradients". Streaming has 6 encoder + 1
+                                    # cross-slice + 3 decoder = 10 chained
+                                    # bin_op_s mixtures. CPU smoke confirmed
+                                    # encoder grad mass ~1e-7 at default
+                                    # grad_factor=1.0; doubling per layer
+                                    # offsets the geometric Jacobian contraction.
     connections: random
     warmup_steps: 16                # T = 32 = N here, so the proposal default
                                     # `warmup_steps = N` would never trigger loss
