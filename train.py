@@ -29,23 +29,19 @@ from src.utils.seeding import seed_all
 
 
 from src.data.mnist_dm import MNISTDataModule
-from src.data.dvsgesture_dm import DVSGestureDataModule
-from src.data.dvsgesture_per_slice_dm import DVSGesturePerSliceDataModule
+from src.data.cifar10_dm import CIFAR10DataModule
 from src.models.logic_classifier import LogicClassifier
-from src.models.tier0_classifier import Tier0Classifier
-from src.models.streaming_classifier import StreamingClassifier
+from src.models.cdlgn_classifier import CDLGNClassifier
 
 # Registries — populated as proposal stages land their classes.
 DATAMODULES: Dict[str, Type[LightningDataModule]] = {
     "mnist": MNISTDataModule,
-    "dvsgesture": DVSGestureDataModule,                       # fused [B, 2, num_bins, H, W]
-    "dvsgesture_per_slice": DVSGesturePerSliceDataModule,     # streaming [B, T, 2, H, W]
+    "cifar10": CIFAR10DataModule,
 }
 
 MODELS: Dict[str, Type[LightningModule]] = {
     "logic_classifier": LogicClassifier,
-    "tier0_classifier": Tier0Classifier,
-    "streaming_classifier": StreamingClassifier,
+    "cdlgn_classifier": CDLGNClassifier,
 }
 
 
@@ -70,6 +66,10 @@ def _build_trainer_kwargs(cfg: AppConfig, logger: TensorBoardLogger, callbacks: 
         devices=cfg.DISTRIBUTED.devices,
         num_nodes=cfg.DISTRIBUTED.num_nodes,
         strategy=cfg.DISTRIBUTED.strategy,
+        # Disable Lightning's default progress bar; PlainTextProgress in
+        # src/utils/callbacks.py handles training progress with newlines that
+        # survive log tailing.
+        enable_progress_bar=False,
     )
     gc = cfg.OPTIMIZER.gradient_clip
     if gc.enabled:

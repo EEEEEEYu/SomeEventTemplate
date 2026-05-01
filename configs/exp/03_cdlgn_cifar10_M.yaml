@@ -1,0 +1,99 @@
+# Phase 1 M4 — LogicTreeNet-M on CIFAR-10. **Phase-1 baseline gate**.
+# Paper target (Petersen et al. 2024, Table 1): 71.01% test acc.
+# Gate: discretized test acc >= 69.0% (paper - 2%).
+
+TRAINING:
+  # 40 epochs with cosine LR schedule. Paper Table 6 lists constant lr=0.02
+  # without explicit schedule; cosine is a defensive add to see if the val
+  # plateau at 65-66% is partly an LR-too-high issue at late training.
+  seed: 0
+  max_epochs: 40
+  deterministic: false
+  num_sanity_val_steps: 0
+  matmul_precision: high
+
+DISTRIBUTED:
+  accelerator: gpu
+  devices: 4                          # tmux 0: 4× RTX A6000
+  num_nodes: 1
+  strategy: ddp
+
+DATA:
+  name: cifar10
+  args:
+    data_root: data
+    n_bits: 3
+    val_size: 5000
+    split_seed: 42
+    download: true
+  dataloader:
+    # Per-GPU bs=32 × 4 GPUs = effective 128 (paper). The bilinear-form
+    # rewrite in `_apply_bin_op_s` (W0 + W1·a + W2·b + W3·ab) cuts per-level
+    # tensor materialization from 16 op-tensors to 4, so this fits in 48 GB.
+    batch_size: 32
+    test_batch_size: 64
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    drop_last: false
+    shuffle_train: true
+
+MODEL:
+  name: cdlgn_classifier
+  args:
+    backbone: cdlgn
+    in_channels: 9                   # 3 channels × 3 thermometer bits
+    k: 256                           # paper M
+    tree_depth: 3
+    channel_groups: 32               # paper §A.3: k/8 = 32 for M (conv blocks).
+    dense_channel_groups: 32         # paper §A.3: grouping throughout the
+                                     # network; same number for the dense head.
+    num_classes: 10
+    tau: 40.0                        # paper τ scaling rule of thumb at M
+    residual_init_z3: 5.0
+    grad_factor: 1.0
+    lr: 0.02
+    weight_decay: 0.002
+    lr_schedule: cosine
+    lr_schedule_T_max: 40
+    lr_schedule_eta_min: 1.0e-5
+
+OPTIMIZER:
+  name: AdamW
+  arguments:
+    lr: 0.02
+    weight_decay: 0.002
+  gradient_clip:
+    enabled: false
+  gradient_accumulation:
+    enabled: false                    # 4 GPUs × bs=32 = 128 effective; no accumulation needed
+  stochastic_weight_averaging:
+    enabled: false
+
+SCHEDULER:
+  learning_rate:
+    enabled: true
+    name: CosineAnnealingLR
+    arguments:
+      T_max: 40                       # match max_epochs
+      eta_min: 1.0e-5                 # ~lr/2000 floor at end of cosine
+    interval: epoch
+  early_stopping:
+    enabled: false
+
+LOGGER:
+  log_dir_root: lightning_logs
+  experiment_name: 03_cdlgn_cifar10_M
+
+CHECKPOINT:
+  enabled: true
+  every_n_epochs: 1
+  monitor: val_acc
+  mode: max
+  filename: "best-{epoch:03d}-{val_acc:.4f}"
+  save_top_k: 1
+  save_last: true
+
+DIAGNOSTICS:
+  gradient_norm_logger: true
+  gradient_norm_log_every_n_steps: 50

@@ -1,22 +1,13 @@
-"""Always-on diagnostic infrastructure (proposal v2.1 §"Always-on additions").
-
-Used by every tier ≥ 1. Lands in Phase P so Stage 2+ runs benefit without
-per-stage retrofitting.
-
-Diagnostic rule of thumb (proposal v2.1, line 143):
-    If encoder gradient norm < (1/10) decoder gradient norm at convergence,
-    the encoder is not learning, regardless of what the loss curve says.
+"""Per-layer-group gradient-norm logging.
 
 Models that want grouped reporting declare their groups by exposing a
 `layer_groups` attribute — a dict mapping group_name → list of parameter-name
 prefixes. Models without it get a single "all" group.
 
-Example (streaming Stage 4 model):
-    self.layer_groups = {
-        "encoder":  ["encoder."],
-        "decoder":  ["decoder."],
-        "groupsum": ["readout."],
-    }
+Diagnostic rule of thumb: if encoder gradient norm < (1/10) of decoder
+gradient norm at convergence, the encoder is not learning regardless of what
+the loss curve looks like. This callback emits the numbers needed to evaluate
+that ratio post-hoc.
 """
 
 from __future__ import annotations
@@ -133,37 +124,3 @@ class GradientNormLogger(pl.Callback):
             self._build_param_groups(pl_module)
         assert self._cached_param_groups is not None
         return {g: self._l2_norm(params) for g, params in self._cached_param_groups.items()}
-
-
-def freeze_decoder_for_warmup(pl_module: pl.LightningModule, current_epoch: int) -> bool:
-    """Encoder warm-up freezing (proposal v2.1 §"Always-on additions" task 2).
-
-    During the first `pl_module.encoder_warmup_epochs` epochs, freeze every
-    parameter that is *not* part of the "encoder" or "groupsum" layer group.
-    Stage 1 has no encoder/decoder split (`layer_groups` is absent or
-    {"all": [...]}) so this is a no-op there — the implementation is what
-    matters now; Stage 4 will exercise it.
-
-    Returns True if any parameter was (un)frozen by this call.
-    """
-    warmup_epochs = int(getattr(pl_module, "encoder_warmup_epochs", 0) or 0)
-    if warmup_epochs <= 0:
-        return False
-
-    spec = _resolve_groups(pl_module)
-    if "encoder" not in spec or len(spec) <= 1:
-        return False  # no meaningful encoder/decoder split — silently a no-op
-
-    in_warmup = current_epoch < warmup_epochs
-    keep_unfrozen = set()
-    for group_name in ("encoder", "groupsum", "readout"):
-        if group_name in spec:
-            keep_unfrozen.update(spec[group_name])
-
-    changed = False
-    for name, param in pl_module.named_parameters():
-        should_be_trainable = not in_warmup or _matches_any_prefix(name, list(keep_unfrozen))
-        if param.requires_grad != should_be_trainable:
-            param.requires_grad = should_be_trainable
-            changed = True
-    return changed

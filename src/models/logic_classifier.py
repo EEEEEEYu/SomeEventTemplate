@@ -27,7 +27,6 @@ import torch.nn as nn
 from torchmetrics.functional.classification import multiclass_accuracy
 
 from src.modules.logic_blocks import LogicLayer, GroupSum
-from src.utils.diagnostics import freeze_decoder_for_warmup
 
 
 class LogicClassifier(pl.LightningModule):
@@ -41,8 +40,6 @@ class LogicClassifier(pl.LightningModule):
         connections: str = "random",
         lr: float = 0.01,
         grad_factor: float = 1.0,
-        encoder_warmup_epochs: int = 0,
-        aux_per_slice_loss_weight: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -61,19 +58,6 @@ class LogicClassifier(pl.LightningModule):
 
         self.net = nn.Sequential(*layers)
         self.loss_fn = nn.CrossEntropyLoss()
-        # Stage 1 has no meaningful encoder/decoder split — `layer_groups` is
-        # absent, so `freeze_decoder_for_warmup` and `GradientNormLogger`'s
-        # group resolution both fall back to a single "all" group. Stage 4's
-        # streaming model will set `self.layer_groups = {"encoder": [...], ...}`.
-        self.encoder_warmup_epochs = encoder_warmup_epochs
-
-    def aux_per_slice_loss(self, encoder_features, y):
-        """Hook for the v2.1 auxiliary per-slice loss (proposal §"Always-on
-        additions" task 1). No-op in Stage 1 (no per-slice encoder output);
-        the streaming Stage 4 model overrides this to attach a small classifier
-        head to the encoder's pre-buffer output and return its CE against `y`.
-        """
-        return None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
@@ -92,11 +76,6 @@ class LogicClassifier(pl.LightningModule):
         self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True,
                  prog_bar=True, batch_size=bs)
         return loss
-
-    def on_train_epoch_start(self):
-        # Encoder warm-up (proposal v2.1 §"Always-on additions" task 2).
-        # No-op for Stage 1 since `layer_groups` is unset.
-        freeze_decoder_for_warmup(self, current_epoch=self.current_epoch)
 
     def training_step(self, batch, batch_idx):
         return self._shared_step(batch, "train")

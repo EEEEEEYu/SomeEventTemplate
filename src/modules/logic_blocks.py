@@ -1,11 +1,9 @@
-"""Stage 1: pass-through wrappers around difflogic primitives.
+"""Pass-through re-exports of difflogic's MLP primitives.
 
-Importing here (rather than from `difflogic` directly throughout the codebase)
-gives us a single seam to drop in `WordLogicLayer` (Stage 3 / Phase P §P3)
-and `ShiftedWordLogicLayer` (Phase P §P4c) without touching every call site.
-
-Per proposal §"Don't touch difflogic CUDA in Stages 1–4", these are
-re-exports — no behavioral changes to the originals.
+Existed in v2.1 as a seam point for the now-removed `WordLogicLayer` /
+`ShiftedWordLogicLayer` extensions. In v3 it just re-exports the difflogic
+primitives so existing call sites (`logic_classifier.py`) don't break;
+new code may import directly from `difflogic` instead.
 """
 
 from __future__ import annotations
@@ -14,6 +12,4 @@ import torch  # must precede difflogic import to load libc10 before the .so
 
 from difflogic import LogicLayer, GroupSum
 
-from src.modules.word_logic import WordLogicLayer
-
-__all__ = ["LogicLayer", "GroupSum", "WordLogicLayer"]
+__all__ = ["LogicLayer", "GroupSum"]

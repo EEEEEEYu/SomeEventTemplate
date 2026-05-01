@@ -1,188 +1,160 @@
-# Project Status
+# STATUS
 
-**Last updated:** 2026-04-29
-**Current stage:** Stages 0 + 1 complete. **Phase P (pre-Stage-2 verifications) starting** per proposal v2.1 tier strategy. Phase P prepares all four optimization tiers and runs Tier 0 as a decisive experiment before committing to the streaming pivot.
-**Blockers:** none — GPU node allocated (rtxa6000 ×4)
+## Current phase
+**Phase 1 closed (gate not formally met; documented-honest-gap accepted, see below).
+Moving to Phase 2 — event-flow pipeline de-risking.**
 
-`proposal.md` is the authoritative spec; this file is the execution log.
+## Phase progress
+- [x] Phase 1: CDLGN reproduction on CIFAR-10 — best M = **65.99%** vs paper 71.01%
+      (gate ≥69% missed by 3.0 pp; -5.0 pp from paper). Closed with documented gap
+      per proposal §Phase 1 honesty rule; remaining gap is generalization, not
+      capacity or undertraining (see findings + table below).
+- [ ] Phase 2: Event-flow pipeline de-risking — **BLOCKED on dataset upload**.
+- [ ] Phase 3: Full flow baseline
+- [ ] Phase 4: BFS novelty exploration
 
-> **Proposal v2 pivot (2026-04-28).** The original Stage 4 contribution (cross-bit *shifts within a 32-bit spatial word*) is being replaced with a **streaming feature-buffer architecture**: per-slice encoder → `[N, M]` shift-register buffer (default N=32 slices, M=32 bits/slice) → decoder with cross-slice operators in its first layer. Training uses Transformer-XL / MeMViT-style detached memory + per-step loss (no BPTT). HDC operators are demoted to a **contingency** that fires only if the default `difflogic16` cross-slice operators fail to beat Stage 2's concat baseline. Full plan: [/nfshomes/haowenyu/.claude/plans/please-look-at-proposal-md-zippy-donut.md](file:///nfshomes/haowenyu/.claude/plans/please-look-at-proposal-md-zippy-donut.md) §"Proposal v2 — temporal feature buffer pivot".
+## Active work — Phase 2 readiness
+Per proposal v3 §Phase 2, we need a small flow benchmark for the "does it work at
+all" experiment. Recommended (in order of preference for fast iteration):
 
-> **Proposal v2.1 update (2026-04-29) — optimization-tier ladder.** v2's "always detach, no BPTT" rule is replaced by a **tier ladder** ([proposal.md §Optimization-tier strategy](proposal.md)): Tier 0 (long word, no buffer, M=128, full BPTT — try first), Tier 1 (long word + small buffer + full BPTT), Tier 2 (long word + medium buffer + truncated BPTT, `tbptt_k≥4` floor), Tier 3 (encoder pretrain + frozen-encoder decoder fine-tune — fallback only). **Tier 0 is the decisive experiment** to run before anything else in the streaming chain — if it clears ≥80% on DVS-Gesture with cross-bit shifts contributing meaningfully, the streaming pivot is deferred and Stages 3–4 collapse to follow-up. Always-on additions (auxiliary per-slice loss, encoder warm-up, gradient-flow diagnostics) apply to every tier ≥1. HDC stays a contingency. Phase P plan: [/nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md](file:///nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md).
+1. **MVSEC** (Multi-Vehicle Stereo Event Camera dataset) — `indoor_flying1` or
+   `outdoor_day1` sequence is enough for Phase 2. ~3–10 GB per sequence. GT
+   optical flow available. Standard entry point in event-flow literature.
+2. **DSEC-Flow** — modern SOTA benchmark, ~100+ GB. Heavier; better for Phase 3.
+3. **A downsampled subset of either** — works fine for Phase 2.
 
----
+**Suggested upload location:** `data/mvsec/<sequence_name>/` (gitignored already).
+Format-flexible — common public packagings are HDF5 (MVSEC) or rosbag → HDF5
+conversion. Once a sequence is uploaded, `src/data/event_flow_dm.py` and a
+small `cdlgn_flow.py` head module follow the existing CDLGNClassifier pattern.
 
-## Phase A — pre-GPU scaffolding
+## Blockers
+- **2026-04-30: Phase 2 blocked on dataset upload.** No event-flow data on disk yet.
 
-- [x] A1 — Repo restructure (template scaffolding deleted, `src/` layout created)
-- [x] A2 — Salvage utilities to `src/utils/` (config, callbacks, resume, seeding)
-- [x] A3 — `STATUS.md` initialized
-- [x] A4 — `src/data/tbr.py` + `tests/test_tbr_encoding.py` (10/10 pass on CPU)
-- [x] A5 — Test scaffolds for Stages 0/3/4 (skip cleanly when prereqs missing — 19 skipped)
-- [x] A6 — `difflogic` clone instructions in README + `.gitignore` excludes the directory
-- [x] A7 — `requirements.txt` updated (`tonic`, `h5py`, `pytest`); `README.md` rewritten
+## Recent results
 
-**Verification:**
-```bash
-mamba activate torch
-python -c "from src.utils.config import load_config; from src.utils.callbacks import load_callbacks; print('ok')"
-pytest tests/ -v          # tbr tests pass; difflogic tests skip
-python train.py --config configs/base.yaml --dry-run
-```
+### Phase 1 sweep summary (CIFAR-10, AdamW lr=0.02, wd=0.002)
 
----
+| Config                                            | S test  | M test  |
+|---------------------------------------------------|---------|---------|
+| Plain (no groups, 6 ep, no cosine)                | 51.74%  | 51.59%  |
+| + conv `channel_groups=k/8`, 20 ep                | 56.20%  | 65.99%  |
+| + cosine LR (T=40), 40 ep                         | 56.83%  | 65.25%  |
+| + dense1/2 grouped, dense3 ungrouped, 40 ep       | 55.84%  | **65.51%** |
+| All 3 dense layers grouped (no recombination)     | 44.02%  |   —     |
+| **Paper**                                         | 60.38%  | 71.01%  |
+| **Phase-1 gate (paper − 2 pp)**                   | (58.4)  | **69.0** |
 
-## Phase B — proposal stages (require GPU)
+Best M run **65.99%**; Phase-1 gate (≥69%) **NOT MET** (-3.0 pp).
 
-### Stage 0 — environment & sanity (proposal §Stage 0) — ✅ accepted
-- [x] `import difflogic_cuda` works (after `import torch`; needs kernel patch — see decisions log)
-- [x] `tests/test_difflogic_imports.py` — 3/3 pass
-- [~] MNIST repro ≥ 97.5% — peak **97.40%**, ~0.1% under nominal; accepted as install-correctness signal (see [experiments/00_difflogic_repro.md](experiments/00_difflogic_repro.md) §Decision)
-- Manifest: [experiments/00_difflogic_repro.md](experiments/00_difflogic_repro.md)
-- **Stage 1 parity baseline: 97.40%** (±0.3% tolerance window: 97.10–97.70%)
+### Findings
+- **Channel grouping** (paper §A.3, k/8 throughout the network) verified
+  structurally: dense1/2 grouped + dense3 ungrouped lands within ±0.5 pp of
+  the un-grouped baseline → confirms paper's "does not reduce accuracy"
+  claim, but also means **this divergence was not the source of the gap**.
+- **Cosine LR schedule**: no-op (-0.7 pp on M, +0.6 pp on S), within noise.
+- **`_apply_bin_op_s` bilinear-form rewrite**: numerically equivalent to
+  `difflogic.functional.bin_op_s` (unit-tested) → not a regression source.
+- **Block-1 RF fix** (5×5 → 3×3 per paper §A.1.1): +0 pp.
+- **Capacity**: M's train_acc reaches 96–98% (plenty of capacity), val_acc
+  stuck at 65–66% → the gap is **generalization**, not optimization or capacity.
+- **Training duration**: 40 epochs × 352 steps = 14,080 steps, ~7× the paper's
+  2,000-step budget. Not undertrained.
 
-### Stage 1 — Lightning + MNIST parity (proposal §Stage 1) — ✅ passed
-- [x] Lightning training runs without errors
-- [x] Discretized test_acc = **97.36%** ≥ 97.10% gate (anchored to Stage 0 baseline 97.40% ±0.3%)
-- [x] Gate count (40,000) + train (~150 it/s) and eval (270 it/s) throughput logged
-- Manifest: [experiments/01_mnist_lightning.md](experiments/01_mnist_lightning.md)
+### Remaining hypotheses (deferred — revisit after Phase 2 produces a flow
+   number, since the same backbone is reused)
+1. **Discretization gap.** Test accuracy is `model.eval()` (hard one-hot per
+   gate). If soft accuracy is meaningfully higher, τ tuning is the issue.
+   Cheap to verify by logging both.
+2. **Random-connectivity seed luck.** difflogic's `connections="random"` is
+   set once at construction. Try 3 seeds.
+3. **Some subtle architectural detail** in the conv tree forward we have not
+   spotted yet (e.g., paper's actual gate-forward ordering inside the tree,
+   or an undocumented training detail like LR warmup).
 
-### Phase P — pre-Stage-2 verifications (proposal v2.1 §Optimization-tier strategy)
+### Phase 1 lock-in
+Configs frozen at the **paper-faithful** recipe (dense1/dense2 grouped,
+dense3 ungrouped, cosine LR T=40, channel_groups=k/8). This is within ±0.5 pp
+of the absolute-best M run (65.99%, no dense grouping, 20 epochs no cosine)
+and is the cleanest baseline to inherit into Phase 2 — same backbone class,
+just different head.
+- **2026-04-30 _apply_bin_op_s ↔ difflogic.bin_op_s equivalence test:** PASSED.
+  Bilinear-form rewrite is numerically identical → not a regression source.
+- **2026-04-30 M run (4-GPU DDP, bilinear bin_op_s, bs=32×4=128):** test_acc =
+  **51.59%** after 6 epochs. Paper M 71.01%; gate ≥69%. **MISSED gate by 17.4 pp.**
+  Train_acc 69.0% / val_acc 52.0% → overfit but val plateaued near S. ~57 s/epoch.
+- **2026-04-30 S re-run (block-1 3×3 fix + 4-GPU DDP):** 51.74%. Block-1 fix
+  had ~0 effect.
+- **2026-04-30 S sanity (1st pass, buggy block-1 5×5):** test_acc 51.66%.
+- **2026-04-30 smoke (stub backbone):** 33.2% in 2 epochs → pipeline working.
+- **2026-04-30:** 26 CPU tests pass (CDLGN module correctness, thermometer
+  encoding, CIFAR-10 datamodule shapes, gradient-norm logger).
+- **Infrastructure 2026-04-30:** `PlainTextProgress` (newline-per-update); 4-GPU
+  DDP wired up with `_ensure_difflogic_tensors_on_device` hook in
+  `CDLGNClassifier` working around difflogic's unregistered `indices` /
+  `given_x_indices_*` attrs; bilinear-form `_apply_bin_op_s` (16 op-tensors
+  per tree level → 4) to fit M in 48 GB at full bs=32 per GPU.
 
-Prepares all four tiers and runs Tier 0 as the decisive experiment. Decision gate at P4d determines whether Stages 2–4 below stay on the critical path.
+## Phase-1 status: GATE NOT MET
+Both S (k=32) and M (k=256) plateau at ~52% test acc — capacity-independent.
+Strongly suggests the issue is NOT undertraining or model size; something
+about the architecture or training recipe systematically caps generalization.
 
-#### P1 — Stage 1 robustness audit — ✅ PASS
-- [x] Discretization-toggle audit (`tests/test_discretization_toggle.py`): forward bit-deterministic in `eval()`, stochastic-relaxed in `train()` — **3/3 pass on GPU**
-- [x] Seed sweep on `configs/exp/01_mnist_lightning.yaml` (seeds {0,1,2,42,1337}) — **PASS: mean 97.28% ± 0.08%, range 0.16%** (gate ≤ 0.3% std). Raw: [experiments/p1_results/seed_sweep.csv](experiments/p1_results/seed_sweep.csv)
-- [x] LR sensitivity at lr ∈ {0.005, 0.01, 0.02} — **PASS (soft)**: at 30 epochs lr=0.005/0.01/0.02 → 96.41%/96.95%/97.17%. Drop at lr=0.005 is undertraining (Stage 0 needs ~36k iters; 30ep = 15k), not a knife-edge. lr=0.01 is robust upward; the proposal's hardcoded lr=0.01 default is validated.
-- [x] P3 + P4c GPU parity tests — **35/35 pass**: WordLogicLayer M=1 / 8 / 32 connectivity + forward parity vs `difflogic.LogicLayer`; ShiftedWordLogicLayer (op×shift reference, shift=0 parity, M=1 invariance, soft real-valued). The Stage 4 (N=1) parity anchor is now bit-for-bit verified on GPU.
-- [x] P1 subsections added to [experiments/01_mnist_lightning.md](experiments/01_mnist_lightning.md) §§P1.1–P1.4
+### Hypotheses to investigate (next session)
+Ordered by suspected impact + effort to test:
 
-#### P2 — Diagnostic infrastructure (always-on additions) — ✅ landed
-- [x] Per-layer-group gradient-norm logger ([src/utils/diagnostics.py](src/utils/diagnostics.py)) — `GradientNormLogger` Lightning callback; resolves layer groups from `pl_module.layer_groups` dict, falls back to `{"all"}` for un-grouped models
-- [x] Aux per-slice loss extension point in `LogicClassifier.aux_per_slice_loss` (no-op default; streaming Stage 4 will override)
-- [x] Encoder warm-up flag (`encoder_warmup_epochs`) — `freeze_decoder_for_warmup` helper; called from `on_train_epoch_start`. No-op when `layer_groups` absent (Stage 1)
-- [x] `tbptt_k`, `encoder_warmup_epochs` added to `TrainingConfig` in `src/utils/config.py` and `configs/base.yaml`; `DIAGNOSTICS.gradient_norm_logger` added (off by default)
-- [x] `tests/test_diagnostics.py` — **6/6 pass on CPU** (gradient logger group resolution, fallback, warm-up freezing/unfreezing, no-op cases, frozen-param exclusion)
+1. **No channel grouping (paper §A.3 uses k/8).** Without it the ConvLogicLayer
+   may be effectively disconnected — leaves sampled uniformly across the full
+   RF can ignore most of the input channels. Implementing `channel_groups`
+   per the paper's k/8 convention could change the regularization profile.
+   **Effort:** small (already supported by `ConvLogicLayer`; just set it in
+   the YAML and re-run).
+2. **`_apply_bin_op_s` bilinear-form equivalence to `difflogic.functional.bin_op_s`.**
+   The rewrite should be exact, but no numerical equivalence test exists. Add
+   one before relying on the rewrite.
+   **Effort:** trivial (one unit test).
+3. **Train longer.** 6 epochs (~2,100 steps) matches the paper budget but val
+   was still climbing slowly. Try 20–40 epochs. **Effort:** trivial (config edit).
+4. **Eval-time discretization gap.** I haven't separately reported soft vs
+   hard accuracy on val. If the soft accuracy is much higher than reported
+   test (which is hard via `model.eval()`), the gap is in the discretization
+   sharpness, suggesting τ tuning is needed.
+   **Effort:** small (add a soft-acc log).
+5. **OR-pool relaxation.** Paper says "max t-norm" which is `F.max_pool2d`. I
+   use exactly that. Sanity-check by ablating OR-pool to plain max-pool to see
+   if anything moves; should be identical.
+6. **Subtle architectural mismatch.** Re-read §A.1.1 with the implementation
+   open side-by-side and verify each layer dim, padding, and connectivity rule.
 
-#### P3 — `WordLogicLayer` skeleton + (N=1, M=1) parity — ✅ CPU verified, GPU queued
-- [x] [src/modules/word_logic.py](src/modules/word_logic.py) — `WordLogicLayer(in_dim, out_dim, M=32)` with per-bit-position 16-op softmax + connectivity-init mirroring `difflogic.LogicLayer.__init__`
-- [x] Connectivity-init audit: RNG order verified — `weights = randn(out, 16)` first, then `randperm(2*out)`, then `randperm(in)`. Tested on CPU: weights and indices match `difflogic.LogicLayer` bit-for-bit under shared seed (M=1 and M=4)
-- [x] [tests/test_word_equivalence_forward.py](tests/test_word_equivalence_forward.py) — filled with M=1 / M=8 / M=32 × 3 seeds parity assertions; **GPU run queued behind seed sweep**
-- [x] `WordLogicLayer` exported from [src/modules/logic_blocks.py](src/modules/logic_blocks.py)
-- [x] [tests/test_word_equivalence_backward.py](tests/test_word_equivalence_backward.py) marked `skip("dropped in v2")` with proposal v2 §Stage 3 task 3 quote in docstring
+### What's solid
+- Pipeline: data, Lightning, DDP, manifest, checkpointing, plain-text logging.
+- Phase 1 file scaffold landed and tested (26 CPU tests pass).
+- Repo cleaned of v1/v2/v2.1 dead code.
 
-#### P4 — Tier 0 decisive experiment (full M=128)
-- [ ] **P4a** — Fork difflogic kernel; extend `tensor_packbits_cuda` to M=128 (4 × int32 packing). **Deferred to follow-up** per proposal §"if the kernel rewrite overruns its budget" fallback. Tier 0 training runs on the slow per-bit float path at M=128 (M-agnostic, works out of the box). Stage 4.5 picks up the kernel work post-Tier-0 if needed.
-- [x] **P4b** — DVS-Gesture single-fused TBR DataModule ([src/data/dvsgesture_dm.py](src/data/dvsgesture_dm.py)): 32×32 downsample (factor-4 integer divide), 16ms × 128 = 2.048s window, h5 cache. Synthetic-event smoke test passes
-- [x] **P4c** — [src/modules/shifted_word_logic.py](src/modules/shifted_word_logic.py): bit-rotate-then-binary-op; shift=0 ≡ `WordLogicLayer` parity anchor. **21/21 tests pass on CPU** (op×shift reference, shift=0 parity, M=1 invariance, soft-path real-valued)
-- [x] **P4d (model + config)** — [src/models/tier0_classifier.py](src/models/tier0_classifier.py) (`Tier0Classifier`) + [configs/exp/P4_tier0_dvsgesture.yaml](configs/exp/P4_tier0_dvsgesture.yaml). End-to-end smoke test passes on CPU at hidden_dim=2046; production config uses hidden_dim=4070 + batch=8 to fit memory headroom on rtxa6000
-- [x] **P4d (run)** — two runs complete 2026-04-29:
-  - Run 1 (baseline, M=128 full alphabet, batch=8): **test_acc 73.48%**, 75 min wall-clock
-  - Run 2 (LUT K=9, batch=24, matmul=high; compile disabled after CUDAGraph + Lightning hook conflict): **test_acc 71.21%**, **7.5 min wall-clock (10× speedup)**
-  - Manifest: [experiments/P4_tier0_dvsgesture.md](experiments/P4_tier0_dvsgesture.md)
-- [x] **Decision gate (proposal v2.1 line 110):** test_acc ≥ 80% **NOT MET** (max 73.48%). Tier 0 is insufficient. Shifts contributed (no collapse to shift=0; train_acc climbed to 95%+) but the architecture caps below the gate. **Next: pivot to the v2 streaming buffer architecture (proposal Stage 3 substrate + Stage 4 cross-slice operators) with always-on additions enabled by default and `tbptt_k=N` initial setting (Tier 1 — full BPTT for small N) per proposal v2.1 §"How this updates the staged plan".**
-- Manifest target: [experiments/P4_tier0_dvsgesture.md](experiments/P4_tier0_dvsgesture.md) (scaffold landed, populated post-run)
+## Phase-1 root-cause findings (S gap)
 
----
+**2026-04-30 paper re-read of §A.1.1.** Caught one architecture bug and confirmed
+several non-issues:
 
-### Stage 2 — TBR + scalar CDLGN, both datasets (proposal v2 §Stage 2 — *lightly reframed*) — **conditional on P4d outcome**
-- [x] TBR encoder unit-tested (10/10 pass; lives in Phase A)
-- [ ] **Per-slice TBR pipeline**: dataloader emits `[T, 2, H, W]` per sample, not a single fused `[2, num_bins, H, W]` tensor (v2 reframing)
-- [ ] **Concat baseline** (the new lower bound): scalar CDLGN over the concatenated `[T·2, H, W]` tensor — this is what the Stage 4 buffer architecture must beat
-- [ ] N-MNIST concat baseline ≥ 95% (placeholder; revisit after first run)
-- [ ] DVS-Gesture concat baseline ≥ 80% on 32×32 downsample (placeholder)
-- [ ] Baseline numbers logged for both datasets
-- Manifest target: `experiments/02_scalar_cdlgn.md`
+- **BUG (fixed):** block 1 had RF 5×5 in our impl, but the paper says all four
+  CIFAR conv blocks use 3×3 RF with padding=1. The 5×5 came from the agent's
+  initial PDF read confusing the MNIST first-block (5×5) with the CIFAR
+  first-block (3×3). Fixed in [src/modules/cdlgn/tree_net.py](src/modules/cdlgn/tree_net.py).
+  Re-running S now.
+- **Confirmed correct:** dense head 128k→1280k→640k→320k (the `*` footnote in
+  §A.1.1 says 2× gates only for B/L sizes); τ values (S=20, M=40); LR=0.02;
+  weight decay=0.002; thermometer encoding (n_bits=3 = paper's "2 input bits");
+  4 OR-pools with stride 2.
+- **Memory:** M run at bs=128 OOMed at 47 GB; the pure-PyTorch ConvLogicLayer
+  is far less memory-efficient than the paper's fused CUDA kernel. Switched to
+  bs=32 + grad-accumulation×4 for iso-effective-batch.
+- **Channel grouping:** paper §A.3 uses k/8 groups; we still default to 1.
+  Expected ≤2 pp effect; revisit only if M still misses after the block-1 fix.
 
-### Stage 3 — word substrate, reframed as buffer substrate (proposal v2 §Stage 3) — **conditional on P4d outcome**
-- [ ] `WordLogicLayer(in, out, N=1, M=1)` forward equals `difflogic.LogicLayer(in, out)` bit-for-bit (the only scalar parity check still meaningful)
-- [ ] `(N, M)` are documented as independent knobs; default `(32, 32)`
-- [ ] Throughput logged for `(N, M) ∈ {(1,32), (32,32)}`
-- [ ] Connectivity-init audit documented
-- ~~Multi-`M` matched-accuracy training~~ — **dropped**: no apples-to-apples scalar baseline in the streaming setting
-- Manifest target: `experiments/03_word_substrate.md`
-
-### Stage 4 — buffer + cross-slice operators (proposal v2 §Stage 4) — make-or-break, ✅ **substrate landed, run pending**
-
-Tier 0 (P4d) capped at test_acc 73.48%, below the 80% gate, so the streaming pivot is now on the critical path per proposal v2.1 §"How this updates the staged plan".
-
-**Substrate landed (all CPU-tested green, 32 new tests + 80 total CPU tests pass):**
-- [x] [src/modules/buffer.py](src/modules/buffer.py) — `FeatureBuffer` `[N, M]` shift register with `tbptt_k` policy (None=Tier 1 full BPTT, k=Tier 2 truncated, 1=v2-original ablation). 10/10 mechanics tests pass.
-- [x] [src/modules/cross_slice_ops.py](src/modules/cross_slice_ops.py) — `CrossSliceOpFamily` ABC + `@register_family` decorator + default `difflogic16` family (vocab 16·N, pruned `j=0` form). Registry pattern; HDC contingency etc. land as new `@register_family` decorators without touching the streaming model. 11/11 op tests pass.
-- [x] [src/data/dvsgesture_per_slice_dm.py](src/data/dvsgesture_per_slice_dm.py) — emits `[T, 2, H, W]` per sample. Reuses the existing HDF5 cache from the fused DataModule (no re-encoding).
-- [x] [src/models/streaming_classifier.py](src/models/streaming_classifier.py) — encoder (scalar `WordLogicLayer(M=1)` halving staircase from `in_features` to `M`) → buffer → cross-slice family → `WordLogicLayer` decoder → `GroupSum`. Per-step loss with configurable `warmup_steps`. 11/11 streaming tests pass including the `N=1` parity-anchor smoke.
-
-**Tier 1 streaming run config:** [configs/exp/S4_streaming_dvsgesture.yaml](configs/exp/S4_streaming_dvsgesture.yaml). T=32 slices × 2 polarities × 32×32 spatial; encoder = 6-layer halving staircase `[1024, 512, 256, 128, 64, 32]`; buffer N=32, M=32; cross_slice_family=`difflogic16`; decoder hidden=4070 × 3 layers; tau=100 (proportional to group_size); `tbptt_k=null` (full BPTT, Tier 1).
-
-**Known risk (CPU smoke):** encoder gradient mass at layer 0 is ~1e-7 vs cross-slice op grads at ~0.2 — classic vanishing grad through ~11 backprop steps (6 encoder + buffer + cross-slice + 3 decoder + readout). Per proposal §Stage 1 task 2 the mitigation is `grad_factor > 1` for deep models; per v2.1 §Always-on the diagnostic logger will catch a true encoder-starvation failure mid-training. Tune on first real run.
-
-- [x] Buffer mechanics test pass
-- [x] Cross-slice op discretized correctness pass
-- [x] Encoder grad fires every step (verified by CPU smoke)
-- [ ] N=1 streaming run reproduces Stage 1's 97.36% on MNIST within ±0.3% — *deferred to first GPU run*
-- [ ] DVS-Gesture streaming beats Tier 0's 73.48% — *deferred to first GPU run*
-- [ ] Operator-choice histogram across slice rows shows P(non-zero idx) ≥ 0.3
-- Manifest target: `experiments/S4_streaming_dvsgesture.md` (to be created on first run)
-
-#### Original Stage 4 checklist (pre-pivot) for cross-reference
-- [ ] Buffer mechanics test (`[N, M]` shift register; row 0 grad-attached, rows 1..N−1 detached)
-- [ ] Detached-gradient test (encoder gradient fires once per step, not T-times accumulated)
-- [ ] Single-slice degenerate case (`N=1`) reproduces Stage 1's 97.36% within ±0.3%
-- [ ] N-MNIST streaming run beats Stage 2 concat baseline (or ties — N-MNIST is weakly temporal)
-- [ ] DVS-Gesture streaming run beats Stage 2 concat baseline iso-gates (the central hypothesis)
-- [ ] Ablation matrix: `N ∈ {8, 16, 32, 64, 128}` × `M ∈ {8, 16, 32, 64}` (only `M=32` cells get fast-inference numbers)
-- [ ] Operator-choice histogram saved
-- [ ] Honest decision documented (proposal v2 §Decision point — beats baseline / ties / fails → trigger contingency)
-- Manifest target: `experiments/04_streaming_buffer.md`
-
-### Stage 4.5 — arbitrary-`M` fast inference (optional engineering follow-up)
-- [ ] Triggered only if Stage 4 succeeds AND `M ≠ 32` ablation shows interesting accuracy patterns
-- [ ] Extend difflogic's packing kernel for `M ∈ {8, 16, 64}` (non-trivial; flagged in plan)
-
-### Contingency — HDC operator vocabulary (NOT a numbered stage)
-- [ ] Triggered only if Stage 4's `difflogic16` cross-slice ops fail to beat the Stage 2 concat baseline
-- [ ] Implements `xor_bind` + `bit_majority_bundle` in the operator registry
-- [ ] Last-resort lever before pivoting away from the architecture
-
-### Stage 5 — comparative baselines (TBR-CNN/BNN, deferred)
-- [ ] Triggered iff Stage 4 produces a positive result; for paper polish, not the critical path
-
-### Stage 6 — incremental inference (formerly optional follow-up)
-- [ ] Now a *natural* fit because the v2 buffer architecture is incremental-by-construction; rephrase from "build incremental inference" to "exploit the architectural fact for runtime gains"
-
----
-
-## Decisions & deviations log
-
-<!-- Append-only. Each entry: date — decision — rationale — link to commit/PR. -->
-
-- **2026-04-28** — Discarded the original template's dynamic-import `ModelInterface`/`DataInterface` core; adopted proposal's `src/{data,models,modules,utils}/` layout with explicit registries in `train.py`. Rationale: per-stage Lightning modules need bespoke `configure_optimizers` (Adam lr=0.01) and inference-mode toggles that fight a generic wrapper. Salvaged: config schema, callback assembly, resume helpers (now under `src/utils/`).
-- **2026-04-28** — Patched `difflogic/cuda/difflogic_kernel.cu` (six `AT_DISPATCH_*` sites: `.type()` → `.scalar_type()`) so it compiles against PyTorch 2.8 (`at::DeprecatedTypeProperties` no longer auto-converts to `c10::ScalarType`). Patch saved to `patches/difflogic_pytorch28_scalar_type.patch`; difflogic commit pinned to `469702c01ff0bfac9cdc6a395134252e11a56bd8`. Install command is `pip install ./difflogic --no-build-isolation` — `-e` and PEP 517 isolation both break in different ways.
-- **2026-04-28** — Stage 0 MNIST repro gate **accepted at 97.40%** (nominal threshold was 97.5%; deviation ~0.1%). Plateaued for ~30k iterations with no upward trend; further training would not change the install-correctness signal this gate is meant to provide. Stage 1 parity check now uses 97.40% as the baseline (±0.3% window). Full rationale: [experiments/00_difflogic_repro.md](experiments/00_difflogic_repro.md) §Decision.
-- **2026-04-28** — Stage 1 Lightning parity passed at **97.36%** test_acc (Δ −0.04% vs Stage 0 baseline). Used `connections="random"` (proposal default) rather than Petersen's `"unique"`; difference was negligible at this scale. lr=0.01 hardcoded as the `LogicClassifier` default to prevent config typos from breaking parity. No `on_validation_epoch_start` hook needed — Lightning's auto `model.eval()` already flips difflogic into the discretized branch.
-- **2026-04-28** — **Architecture pivot to proposal v2.** Original Stage 4 (cross-bit shifts within a 32-bit spatial word) is replaced with a streaming feature-buffer architecture: per-slice encoder → `[N, M]` shift-register buffer → decoder with cross-slice operators. Training uses Transformer-XL / MeMViT-style detached memory + per-step loss (no BPTT). Rationale: matches event-camera streaming semantics; supports natural Stage 6 incremental inference; replaces word-dim shifts with a more general cross-slice operator vocabulary. HDC operators are demoted from a planned stage to a **contingency** that fires only if `difflogic16` cross-slice ops fail. `M=32` is the demo default (uses difflogic's existing int32 packing path); `M ≠ 32` gets training-only support (no fast-inference numbers) unless Stage 4.5 is triggered. Plan file: [/nfshomes/haowenyu/.claude/plans/please-look-at-proposal-md-zippy-donut.md](file:///nfshomes/haowenyu/.claude/plans/please-look-at-proposal-md-zippy-donut.md).
-- **2026-04-29** — **Streaming buffer substrate landed (proposal v2 §Stage 4 / Tier 1).** Built the streaming architecture per proposal §Stage 4: `src/modules/buffer.py` (`FeatureBuffer` with config-tunable `tbptt_k` — None/Tier 1, k/Tier 2, 1/v2-original), `src/modules/cross_slice_ops.py` (registry + `difflogic16` default family — pluggable; HDC contingency lands as `@register_family` w/o model changes), `src/data/dvsgesture_per_slice_dm.py` (`[T, 2, H, W]` per sample, reuses fused cache), `src/models/streaming_classifier.py` (encoder halving-staircase + buffer + cross-slice + word-logic decoder + GroupSum). 32 new CPU tests pass; 80 CPU tests total green. Streaming run config at `configs/exp/S4_streaming_dvsgesture.yaml` ready for GPU. Known concern from CPU smoke: encoder grad mass ~1e-7 at layer 0 vs ~0.2 at cross-slice op (vanishing-grad through 11 backprop steps). Mitigation queued: bump `grad_factor` per proposal §Stage 1 task 2.
-- **2026-04-29** — **Tier 0 optimization landed (10× speedup; ready for streaming-buffer iteration).** Phase P §P4d ran twice. Run 1 (baseline, full M=128 shift alphabet, batch=8) reached **test_acc 73.48%** in 75 min — below the 80% gate, but the architecture is sound. Run 2 added the log-scale `shift_lut = (0, 1, 2, 4, 8, 16, 32, 64, 127)` (K=9 instead of M=128 — 14× memory reduction on the soft-shift bottleneck), bumped batch to 24 (DDP-effective 48), and enabled `set_float32_matmul_precision('high')`; landed **test_acc 71.21%** in **7.5 min (10× speedup)**, accuracy gap of 2.3% from the baseline. `torch.compile` was attempted at both `reduce-overhead` (broke on CUDAGraph + Lightning's `self.log` interaction) and default mode (gradient flow stalled at random val_acc due to LightningModule hook recompiles); disabled for this run, future work to compile only the inner `body` Sequential. Tier 0's accuracy gate not met → architecture-level decision: pivot to v2 streaming buffer (Stages 3–4) with always-on additions and Tier 1 full-BPTT initial setting. Tooling for fast iteration is in place. Plan: [/nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md](file:///nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md).
-- **2026-04-29** — **P4a (M=128 packbits kernel rewrite) deferred to follow-up.** Tier 0 (P4d) runs on the per-bit float slow inference path at M=128 — `WordLogicLayer` and `ShiftedWordLogicLayer` are M-agnostic by construction, so training works out of the box without kernel changes. Fast int32 inference at M=128 is what the kernel rewrite enables; not needed to evaluate the decision gate (≥80% test_acc + meaningful shift histogram). Stage 4.5 picks up the kernel work post-Tier-0 if results justify a fast-inference paper claim. Rationale: prioritise getting the decisive experiment running over multi-day CUDA work whose value is gated on Tier 0 succeeding.
-- **2026-04-29** — **Adopted proposal v2.1 — tier ladder + always-on additions.** v2's "always detach, no BPTT" rule is replaced by a tunable `tbptt_k` config flag with floor `k=4` for Tier 2 default (full BPTT for small N, truncated BPTT for medium N, encoder-pretrain fallback for Tier 3). Inserted **Phase P (pre-Stage-2 verifications)** before Stage 2 covering: P1 Stage 1 robustness audit, P2 always-on diagnostic infrastructure (gradient-norm logger, aux per-slice loss hook, encoder warm-up), P3 `WordLogicLayer` (N=1, M=1) parity skeleton (Stage 3 pulled forward), and P4 **full Tier 0 decisive experiment** at M=128 with `tensor_packbits_cuda_kernel` extension (4 × int32 packing). Selected full Tier 0 over the cheap M=32 variant — accepts multi-day kernel cost in exchange for testing the v1 single-fused-tensor + cross-bit-shift hypothesis cleanly. Rationale: surface possible early-success result (collapse Stages 3–4 to follow-up); de-risk Stage 4 optimization story per RDDLGN evidence (BPTT through LGN substrate works at S=3). Plan file: [/nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md](file:///nfshomes/haowenyu/.claude/plans/hi-please-look-proposal-md-buzzing-creek.md).
-
-## Open risks
-
-- DVS-Gesture full 128×128 input dimensionality (proposal §Note on DVS-Gesture spatial resolution) — start with 32×32 downsample; revisit only if accuracy is poor.
-- TBR cache directory growth — log size after first encode; set retention policy if it gets large.
-- difflogic CUDA build version-mismatch — pin a known-good commit; record CUDA toolkit + PyTorch version in run manifests.
-- ~~Stage 3 connectivity-init parity~~ — superseded by v2; multi-`M` parity test is dropped, only the `(N=1, M=1)` degenerate parity remains.
-- **Sparse encoder gradients in v2 Stage 4.** With a detached buffer the encoder receives gradient at every step but only via row 0; effective signal is `1/N` of the decoder's gradient. Mitigations queued: per-slice classification warm-up, auxiliary per-slice loss. Watch for symptoms: encoder train loss not falling while decoder train loss does.
-- **DVS-Gesture variable sample length.** Need a fixed slice count `N` per sample. Default plan: `N=32` slices at `bin_duration_us = sample_window_us/N`, padding short samples with zeros.
-- **M=128 packbits kernel rewrite (P4a).** Multi-day CUDA work; CUDA has no native int128 so M=128 is implemented as 4 × int32 along an inner `pieces` axis. Fallback if budget overruns: training-only Tier 0 with slow per-bit-float inference path; Stage 4.5 then becomes critical-path later instead of optional. Schedule for the kernel work: 3–5 days, with a 1-week hard ceiling before triggering the fallback.
-- **Tier 0 collapse to `shift=0` (P4d).** If >90% of `ShiftedWordLogicLayer` neurons learn `shift=0`, cross-bit shifts aren't contributing and Tier 0 reduces to a wide-`M` plain CDLGN. Operator-choice histogram (P4d task 4) catches this honestly even if accuracy is fine; record as a negative result rather than a positive Tier 0 outcome.
-- ~~**DVS-Gesture data acquisition blocked (2026-04-29).** figshare AWS WAF (HTTP 202, 0 bytes) blocks tonic's downloader.~~ **Resolved 2026-04-29 15:07:** user populated `data/DVSGesture/{ibmGestureTrain,ibmGestureTest}/` from a local copy at `/fs/nexus-projects/DVS_Actions/DVSGestureData/`. We patch `tonic.datasets.DVSGesture._check_exists` in [src/data/dvsgesture_dm.py:prepare_data](src/data/dvsgesture_dm.py) to require only the `.npy` tree (the tar.gz isn't read at sample time). One stray empty `ibmGestureTrain/download/` dir was removed (it broke tonic's `userXX_lighting/` path parser).
-
-## Recent run pointers
-
-<!-- One bullet per completed run, newest first. Format:
-  - YYYY-MM-DD  experiment_name  metric_summary  manifest_path  commit
--->
-
-(none yet)
+## Open questions
+- Encoding spec double-confirm (proposal §Phase 1 Task 1): plan defaults to
+  thermometer thresholds `(i+1)/(n_bits+1)` per the difflogic reference and paper
+  §A.1.1; n_bits=3 for S/M, 31 for B/L/G. Will proceed unless told otherwise.
+- Channel grouping (paper §A.3): default `channel_groups=1`. The faithful
+  paper repro uses `k/8`; defer until S sanity lands and we know whether the
+  un-grouped baseline closes the 2% gap.

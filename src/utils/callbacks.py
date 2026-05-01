@@ -2,52 +2,96 @@
 
 from __future__ import annotations
 
-from typing import List
+import os
+import time
+from typing import List, Optional
 
+import lightning.pytorch as pl
 import lightning.pytorch.callbacks as plc
-from lightning.pytorch.callbacks import RichProgressBar
-from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
-from rich.table import Table
 
 from src.utils.config import AppConfig
 from src.utils.diagnostics import GradientNormLogger
 
 
-class MultiRowRichProgressBar(RichProgressBar):
-    """Rich progress bar that wraps logged metrics across multiple rows so wide
-    metric tables don't truncate. Drops the noisy `v_num` field."""
+class PlainTextProgress(plc.Callback):
+    """Newline-per-update training progress that survives `tail -f`.
 
-    def __init__(self, metrics_per_row: int = 5, refresh_rate: int = 1, leave: bool = False):
-        super().__init__(theme=RichProgressBarTheme())
-        self.metrics_per_row = metrics_per_row
+    The default `RichProgressBar` redraws in place, which is invisible to
+    log tailers and `tmux capture-pane`. This callback prints a single line
+    per `print_every_n_steps` steps and a one-line summary at every epoch
+    end. Rank-0 only.
+    """
 
-    def get_metrics(self, trainer, pl_module):
-        metrics = super().get_metrics(trainer, pl_module)
-        metrics.pop("v_num", None)
-        return metrics
+    def __init__(self, print_every_n_steps: int = 50):
+        super().__init__()
+        self.print_every_n_steps = print_every_n_steps
+        self._epoch_start_time: Optional[float] = None
+        self._last_step_time: Optional[float] = None
 
-    def _render_metrics_table(self, metrics: dict) -> Table:
-        table = Table(show_header=False, box=None, expand=True)
-        keys = list(metrics.keys())
-        for i in range(0, len(keys), self.metrics_per_row):
-            row = []
-            for k in keys[i: i + self.metrics_per_row]:
-                v = metrics[k]
-                row.append(f"{k}: {v:.5f}" if isinstance(v, (int, float)) else f"{k}: {v}")
-            table.add_row(*row)
-        return table
+    @staticmethod
+    def _is_rank_zero() -> bool:
+        return int(os.environ.get("LOCAL_RANK", 0)) == 0 and int(os.environ.get("RANK", 0)) == 0
 
-    def render(self, *args, **kwargs):
-        renderables = super().render(*args, **kwargs)
-        metrics = self.get_metrics(self._trainer, self._trainer.lightning_module)
-        if renderables and metrics:
-            renderables[-1] = self._render_metrics_table(metrics)
-        return renderables
+    def on_train_epoch_start(self, trainer, pl_module):
+        if not self._is_rank_zero():
+            return
+        self._epoch_start_time = time.time()
+        self._last_step_time = self._epoch_start_time
+        total_steps = trainer.num_training_batches
+        print(
+            f"[epoch {trainer.current_epoch:3d} start] steps={total_steps} "
+            f"global_step={trainer.global_step}",
+            flush=True,
+        )
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if not self._is_rank_zero():
+            return
+        if (batch_idx + 1) % self.print_every_n_steps != 0:
+            return
+        now = time.time()
+        dt = now - (self._last_step_time or now)
+        self._last_step_time = now
+        steps_per_sec = self.print_every_n_steps / dt if dt > 0 else 0.0
+
+        loss = outputs["loss"].item() if isinstance(outputs, dict) and "loss" in outputs else float("nan")
+        total = trainer.num_training_batches
+        print(
+            f"[epoch {trainer.current_epoch:3d}] step {batch_idx + 1:5d}/{total:5d} "
+            f"({(batch_idx + 1) / total * 100:5.1f}%)  loss={loss:.4f}  "
+            f"{steps_per_sec:5.2f} it/s",
+            flush=True,
+        )
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        if not self._is_rank_zero():
+            return
+        dt = time.time() - (self._epoch_start_time or time.time())
+        metrics = {k: float(v) for k, v in trainer.callback_metrics.items()
+                   if hasattr(v, "item") or isinstance(v, (int, float))}
+        # Compact one-line summary.
+        keys = ["train_loss_epoch", "train_acc", "val_loss", "val_acc"]
+        parts = [f"{k}={metrics[k]:.4f}" for k in keys if k in metrics]
+        print(
+            f"[epoch {trainer.current_epoch:3d} end  ] elapsed={dt:6.1f}s  "
+            + "  ".join(parts),
+            flush=True,
+        )
+
+    def on_test_epoch_end(self, trainer, pl_module):
+        if not self._is_rank_zero():
+            return
+        m = trainer.callback_metrics
+        ta = m.get("test_acc")
+        tl = m.get("test_loss")
+        ta_v = ta.item() if hasattr(ta, "item") else ta
+        tl_v = tl.item() if hasattr(tl, "item") else tl
+        print(f"[test] test_acc={ta_v}  test_loss={tl_v}", flush=True)
 
 
 def load_callbacks(cfg: AppConfig) -> List[plc.Callback]:
     callbacks: List[plc.Callback] = [
-        MultiRowRichProgressBar(refresh_rate=1, leave=False, metrics_per_row=5),
+        PlainTextProgress(print_every_n_steps=50),
         plc.LearningRateMonitor(logging_interval="epoch"),
     ]
 
