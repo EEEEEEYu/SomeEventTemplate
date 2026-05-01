@@ -1,8 +1,12 @@
 # STATUS
 
 ## Current phase
-**Phase 1 closed (gate not formally met; documented-honest-gap accepted, see below).
-Moving to Phase 2 — event-flow pipeline de-risking.**
+**Phase 1.5 complete. Stage A green (torchlogix `ClgnCifar10Medium` matches
+paper trajectory) and Stage B refactor merged: homegrown CDLGN code removed,
+v2.1 streaming-buffer work preserved at git tag `v2.1-streaming-buffer-relic`.
+Now: dual-task substrate ready (CIFAR-10 + DVS-Gesture classification on
+torchlogix); Phase 2 flow path is stubbed (`src/models/torchlogix_flow.py`)
+awaiting MVSEC dataset upload.**
 
 ## Phase progress
 - [x] Phase 1: CDLGN reproduction on CIFAR-10 — best M = **65.99%** vs paper 71.01%
@@ -12,6 +16,20 @@ Moving to Phase 2 — event-flow pipeline de-risking.**
 - [ ] Phase 2: Event-flow pipeline de-risking — **BLOCKED on dataset upload**.
 - [ ] Phase 3: Full flow baseline
 - [ ] Phase 4: BFS novelty exploration
+
+## Active work — Phase 1.5 (torchlogix adapter)
+- **2026-04-30 Stage A GREEN.** torchlogix `ClgnCifar10Medium` ran on 4× A6000
+  DDP for 10 epochs from `04_torchlogix_cifar10_M.yaml`, hit **test_acc =
+  60.12%** with train_acc 78% / val_acc 59% on a still-climbing trajectory.
+  Paper M = 71.01%; 10 epochs is well below paper's ~5.7-epoch budget per the
+  step count, but trajectory is paper-consistent. **No DDP workaround needed**
+  (torchlogix manages its own connection tensors), no OOM at bs=32 per GPU.
+  ~180 s/epoch (~3× slower than our hand-written impl).
+- **2026-04-30: torchlogix 0.1.1 installed and verified.** Full verification
+  report: [docs/torchlogix_verification.md](docs/torchlogix_verification.md).
+- **Stage B in progress** — clear self-implemented CDLGN, retain dual-task
+  ability (CIFAR-10 / DVS-Gesture classification + MVSEC flow) with shared
+  infra. Awaiting scoping decisions (see below).
 
 ## Active work — Phase 2 readiness
 Per proposal v3 §Phase 2, we need a small flow benchmark for the "does it work at

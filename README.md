@@ -1,62 +1,79 @@
-# Word-Level Logic Gate Networks for Event Cameras
+# Differentiable Logic Gate Networks for Event Cameras
 
-PyTorch Lightning implementation of word-level differentiable logic gate networks
-([difflogic](https://github.com/Felix-Petersen/difflogic)) trained on event-camera
-data (N-MNIST, DVS-Gesture). The contribution is a cross-bit (shifted) operator
-vocabulary that exploits the temporal structure in TBR-encoded event streams.
+PyTorch Lightning training stack for differentiable logic gate networks
+([torchlogix](https://github.com/ligerlac/torchlogix)) on two tasks:
 
-The full research plan, stage gates, and decision points live in [proposal.md](proposal.md).
-Live execution state is tracked in [STATUS.md](STATUS.md).
+- **Image classification** (CIFAR-10, paper-spec `ClgnCifar10*` from
+  Petersen et al. 2024).
+- **Event-camera action recognition** (DVS-Gesture, single-fused
+  TBR encoding feeding a logic-conv classifier).
+
+A flow-estimation path (`TorchlogixFlow`) is stubbed for Phase 2 (MVSEC).
+
+The research plan and stage gates live in [proposal_v3.md](proposal_v3.md);
+live execution state is in [STATUS.md](STATUS.md). The verification of
+torchlogix and Stage-A→B refactor history is in
+[docs/torchlogix_verification.md](docs/torchlogix_verification.md). The
+v2.1 streaming-buffer experiments are preserved at git tag
+`v2.1-streaming-buffer-relic`.
 
 ## Layout
 
 ```
-proposal.md     — research plan (immutable spec)
-STATUS.md       — live execution state, per-stage gate checklist
-train.py        — Hydra/OmegaConf entry point; explicit model/data registries
+proposal_v3.md      — research plan (immutable spec)
+STATUS.md           — live execution state
+train.py            — entry point; explicit model + data registries
 configs/
-  base.yaml     — shared defaults
-  exp/          — one yaml per experiment (stages 1–4)
+  base.yaml         — shared defaults
+  exp/
+    cifar10_M.yaml      — CIFAR-10 classification (paper-spec ClgnCifar10Medium)
+    dvsgesture_M.yaml   — DVS-Gesture classification (TBR M=128 → fused conv-LGN)
 src/
-  data/         — Lightning DataModules + TBR encoder
-  models/       — LightningModules
-  modules/      — nn.Module building blocks (logic_blocks, word_logic)
-  utils/        — config, callbacks, resume, seeding
-tests/          — pytest; equivalence + correctness gates
-experiments/    — per-stage write-ups + per-run manifest.json
-data/           — gitignored: raw datasets + cached TBR tensors
-difflogic/      — gitignored: cloned externally (see Setup)
+  data/
+    cifar10_dm.py     — torchvision CIFAR-10 + optional thermometer transform
+    dvsgesture_dm.py  — DVS-Gesture (tonic) + TBR encoder (HDF5 cached)
+    thermometer.py    — paper-faithful thermometer encoding (utility)
+    tbr.py            — vectorized event → TBR tensor encoder
+  models/
+    torchlogix_classifier.py   — classification (CIFAR-10 + DVS-Gesture)
+    torchlogix_flow.py         — flow estimation (Phase-2 stub)
+  modules/
+    torchlogix_backbones.py    — backbone factories: cifar10 / gesture / flow
+  utils/                       — config, callbacks (PlainTextProgress + grad-norm
+                                  logger), seeding, resume, manifest
+tests/                — pytest; correctness gates for shared utilities
+experiments/          — per-run manifest.json + run.log
+data/                 — gitignored: raw datasets + cached encodings
+docs/
+  cdlgn_paper.md             — paper architecture summary (reference)
+  torchlogix_verification.md — Stage-A verification report
 ```
 
 ## Setup
 
-The cluster GPU is queued; phase A (scaffolding, TBR encoder, tests) runs on the
-login node via the `torch` mamba env. Phase B (proposal stages 0–4) needs GPU.
-
 ```bash
 mamba activate torch
 pip install -r requirements.txt
-
-# difflogic ships a CUDA extension. Clone it once a GPU node is available.
-# Pin a known-good commit during Stage 0 (proposal §Stage 0 task 1) and record
-# it in the run manifest.
-git clone https://github.com/Felix-Petersen/difflogic.git
-pip install -e ./difflogic       # builds difflogic_cuda — needs CUDA
-python -c "import difflogic_cuda"   # must succeed before Stage 1
 ```
 
-## Run a stage
+torchlogix ships pure-Python — no CUDA build step. CIFAR-10 + DVS-Gesture
+both auto-download on first run.
+
+## Run
 
 ```bash
-# Sanity check on the login node — builds Trainer, prints registry, no fit:
-python train.py --config configs/base.yaml --dry-run
+# CIFAR-10 (4-GPU DDP):
+bash scripts/launch_train.sh configs/exp/cifar10_M.yaml
 
-# Real training (once GPU + a stage's config exists):
-python train.py --config configs/exp/01_mnist_lightning.yaml
+# DVS-Gesture:
+bash scripts/launch_train.sh configs/exp/dvsgesture_M.yaml
+
+# Sanity check on a login node — builds Trainer, prints registry, no fit:
+python train.py --config configs/exp/cifar10_M.yaml --dry-run
 ```
 
-Each experiment is one yaml — there are no CLI overrides for hyperparameters
-(proposal §Cross-cutting rules: "One config per experiment").
+Each experiment is one yaml — no CLI hyperparameter overrides (proposal v3
+§Cross-cutting rules: "One config per experiment").
 
 ## Tests
 
@@ -64,10 +81,8 @@ Each experiment is one yaml — there are no CLI overrides for hyperparameters
 pytest tests/ -v
 ```
 
-On the login node: 10 TBR encoder tests pass; difflogic / word-logic equivalence
-tests are in tree but skip cleanly until their prereqs land.
+CPU-runnable; cluster-GPU tests skip on the login node.
 
 ## Status
 
-See [STATUS.md](STATUS.md) for the current phase, which gates have passed, and
-the per-stage progress checklist.
+[STATUS.md](STATUS.md) for the current phase + gate checklist.

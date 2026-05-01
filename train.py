@@ -28,20 +28,21 @@ from src.utils.resume import get_resume_info
 from src.utils.seeding import seed_all
 
 
-from src.data.mnist_dm import MNISTDataModule
 from src.data.cifar10_dm import CIFAR10DataModule
-from src.models.logic_classifier import LogicClassifier
-from src.models.cdlgn_classifier import CDLGNClassifier
+from src.data.dvsgesture_dm import DVSGestureDataModule
+from src.models.torchlogix_classifier import TorchlogixClassifier
+from src.models.torchlogix_flow import TorchlogixFlow
 
-# Registries — populated as proposal stages land their classes.
+# Registries — task-specific Lightning modules and datamodules. Add a new
+# entry when landing a new task or dataset.
 DATAMODULES: Dict[str, Type[LightningDataModule]] = {
-    "mnist": MNISTDataModule,
     "cifar10": CIFAR10DataModule,
+    "dvsgesture": DVSGestureDataModule,
 }
 
 MODELS: Dict[str, Type[LightningModule]] = {
-    "logic_classifier": LogicClassifier,
-    "cdlgn_classifier": CDLGNClassifier,
+    "torchlogix_classifier": TorchlogixClassifier,    # CIFAR-10 / DVS-Gesture
+    "torchlogix_flow": TorchlogixFlow,                # MVSEC (Phase 2 stub)
 }
 
 

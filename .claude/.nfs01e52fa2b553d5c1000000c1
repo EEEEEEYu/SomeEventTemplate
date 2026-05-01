@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mamba env *)",
+      "Bash(tmux list-sessions *)",
+      "Bash(tmux capture-pane *)",
+      "Bash(tmux send-keys *)",
+      "Bash(grep -B2 -A8 \"store_results\\({$\\\\|print\\(r\\)\\\\|IS THE BEST\" /fs/nexus-scratch/haowenyu/SomeEventTemplate/difflogic/experiments/main.py)",
+      "Bash(grep -B1 -A20 \"r = {$\\\\|r = dict\\\\|^[[:space:]]*r = \" /fs/nexus-scratch/haowenyu/SomeEventTemplate/difflogic/experiments/main.py)",
+      "Bash(sort -t' ' -k2 -gr)",
+      "Bash(Trainer.fit)",
+      "Bash(grep --line-buffered -oE \"val_acc: [0-9.]+|test_acc: [0-9.]+|val_loss: [0-9.]+|Epoch [0-9]+:.*100%|Traceback|RuntimeError|^Killed|out of memory|`Trainer.fit` stopped\")"
+    ]
+  }
+}

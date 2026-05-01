@@ -39,6 +39,18 @@ class _ThermometerTransform:
         return thermometer_encode(x, self.n_bits)
 
 
+class _RawTensorTransform:
+    """ToTensor() only — emits float (3, 32, 32) in [0, 1] without binarization.
+    Used when the model handles binarization internally (e.g. torchlogix's
+    `FixedBinarization`)."""
+
+    def __init__(self):
+        self._to_tensor = transforms.ToTensor()
+
+    def __call__(self, img):
+        return self._to_tensor(img)
+
+
 class CIFAR10DataModule(pl.LightningDataModule):
     def __init__(
         self,
@@ -47,6 +59,7 @@ class CIFAR10DataModule(pl.LightningDataModule):
         val_size: int = 5_000,
         split_seed: int = 42,
         download: bool = True,
+        apply_thermometer: bool = True,
         dataloader_cfg: Optional[DataloaderConfig] = None,
     ):
         super().__init__()
@@ -55,8 +68,14 @@ class CIFAR10DataModule(pl.LightningDataModule):
         self.val_size = val_size
         self.split_seed = split_seed
         self.download = download
+        self.apply_thermometer = apply_thermometer
         self.dl_cfg = dataloader_cfg or DataloaderConfig()
-        self.transform = _ThermometerTransform(n_bits)
+        # If the model does its own binarization (e.g. torchlogix's
+        # FixedBinarization), feed it raw float tensors and skip the dataloader-
+        # side thermometer transform.
+        self.transform = (
+            _ThermometerTransform(n_bits) if apply_thermometer else _RawTensorTransform()
+        )
 
     def prepare_data(self):
         if self.download:

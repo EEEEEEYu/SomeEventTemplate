@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Phase 1 — launch a CDLGN CIFAR-10 run.
+# Generic train launcher. Tail-friendly progress goes to both stdout and
+# experiments/<EXP_NAME>/run.log.
 #
-# Usage:  bash scripts/p1_launch_cdlgn.sh configs/exp/02_cdlgn_cifar10_S.yaml
+# Usage:
+#   bash scripts/launch_train.sh configs/exp/cifar10_M.yaml
+#   bash scripts/launch_train.sh configs/exp/dvsgesture_M.yaml
 #
-# The CIFAR-10 cache is downloaded under data/ on first run (~170 MB).
-# Output (TensorBoard events + manifest.json + best/last checkpoints) goes to
-# the experiment_name set in the yaml's LOGGER block.
+# Datasets cache to data/ on first run.
 set -euo pipefail
 cd /fs/nexus-scratch/haowenyu/SomeEventTemplate
 
@@ -16,12 +17,12 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 
 EXP_NAME=$(grep -E '^[[:space:]]*experiment_name:' "$CONFIG" | head -1 | awk -F': ' '{print $2}' | tr -d '"' | tr -d "'")
-EXP_NAME=${EXP_NAME:-cdlgn_cifar10}
+EXP_NAME=${EXP_NAME:-train_run}
 
 mkdir -p "experiments/${EXP_NAME}"
 LOG="experiments/${EXP_NAME}/run.log"
 
-echo "=== Phase 1 launch ==="
+echo "=== launch ==="
 echo "config:        $CONFIG"
 echo "experiment:    $EXP_NAME"
 echo "log:           $LOG"

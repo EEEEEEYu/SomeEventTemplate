@@ -1,0 +1,87 @@
+# DVS-Gesture — torchlogix gesture classifier (single-fused TBR Tier-0 framing).
+# Input: TBR `(2, 128, 32, 32)` per sample → flatten to (256, 32, 32) → conv stack.
+# Architecture: `gesture_classifier_backbone` (cifar-style with k=32, group_size=2).
+# 11 gesture classes.
+
+TRAINING:
+  seed: 0
+  max_epochs: 30
+  deterministic: false
+  num_sanity_val_steps: 0
+  matmul_precision: high
+
+DISTRIBUTED:
+  accelerator: gpu
+  devices: 4
+  num_nodes: 1
+  strategy: ddp
+
+DATA:
+  name: dvsgesture
+  args:
+    data_root: data
+    num_bins: 128                     # TBR M=128 (matches existing cache)
+    bin_duration_us: 16000            # 16 ms / bin
+    sensor_h: 32
+    sensor_w: 32
+    download: true                    # uses tonic; first-time setup encodes to TBR + caches
+  dataloader:
+    batch_size: 16                    # per-GPU; tune up if memory allows
+    test_batch_size: 32
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    drop_last: false
+    shuffle_train: true
+
+MODEL:
+  name: torchlogix_classifier
+  args:
+    backbone: gesture
+    backbone_kwargs:
+      in_channels: 256                # 2 polarities × 128 time bins (TBR fused)
+      spatial: 32
+      k: 32                           # cifar-S-equivalent width to start
+      num_classes: 11                 # DVS-Gesture has 11 classes
+      tau: 20.0
+      channel_group_size: 2
+      grad_factor: 1.0
+      parametrization: raw
+    num_classes: 11
+    lr: 0.02
+    weight_decay: 0.002
+    lr_schedule: null
+
+OPTIMIZER:
+  name: AdamW
+  arguments:
+    lr: 0.02
+    weight_decay: 0.002
+  gradient_clip:
+    enabled: false
+  gradient_accumulation:
+    enabled: false
+  stochastic_weight_averaging:
+    enabled: false
+
+SCHEDULER:
+  learning_rate:
+    enabled: false
+  early_stopping:
+    enabled: false
+
+LOGGER:
+  log_dir_root: lightning_logs
+  experiment_name: dvsgesture_M
+
+CHECKPOINT:
+  enabled: true
+  every_n_epochs: 1
+  monitor: val_acc
+  mode: max
+  filename: "best-{epoch:03d}-{val_acc:.4f}"
+  save_top_k: 1
+  save_last: true
+
+DIAGNOSTICS:
+  gradient_norm_logger: false
